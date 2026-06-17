@@ -220,6 +220,27 @@ class GPT(nn.Module):
 
         return idx
 
+    @torch.no_grad()
+    def generate_iter(
+        self,
+        idx: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+    ):
+        """Streaming version of generate — yields one token id at a time."""
+        for _ in range(max_new_tokens):
+            idx_cond = idx if idx.size(1) <= self.cfg.block_size else idx[:, -self.cfg.block_size:]
+            logits, _ = self(idx_cond)
+            logits = logits[:, -1, :] / temperature
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = float("-inf")
+            probs = F.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat([idx, next_token], dim=1)
+            yield next_token.item()
+
     def num_parameters(self, non_embedding: bool = True) -> int:
         n = sum(p.numel() for p in self.parameters())
         if non_embedding:

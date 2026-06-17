@@ -1,0 +1,416 @@
+"""
+AI-local CLI — Ollama-compatible command line interface.
+
+Commands:
+  serve               Start the REST API server
+  run   <model>       Interactive chat with a model
+  list                List available models
+  show  <model>       Show model details
+  ps                  Show currently loaded models (from running server)
+  pull  <stage>       Run training pipeline for a stage
+  rm    <model>       Delete a model checkpoint
+
+Usage:
+    python cli.py serve
+    python cli.py run dpo_ckpt
+    python cli.py list
+    python cli.py show ckpt
+    python cli.py pull sft
+    python cli.py rm dpo_ckpt
+"""
+
+import argparse
+import glob
+import json
+import os
+import pickle
+import subprocess
+import sys
+import time
+
+
+CHECKPOINTS_DIR = "checkpoints"
+DATA_DIR = "data"
+SERVER_URL = "http://127.0.0.1:11434"
+
+GREEN  = "\033[92m"
+YELLOW = "\033[93m"
+CYAN   = "\033[96m"
+RESET  = "\033[0m"
+BOLD   = "\033[1m"
+
+
+# ─── Utilities ────────────────────────────────────────────────────────────────
+
+def _discover_models() -> list[str]:
+    paths = glob.glob(os.path.join(CHECKPOINTS_DIR, "*.pt"))
+    return [os.path.splitext(os.path.basename(p))[0] for p in sorted(paths)]
+
+
+def _sizeof_fmt(num: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if num < 1024:
+            return f"{num:.1f} {unit}"
+        num /= 1024
+    return f"{num:.1f} TB"
+
+
+def _load_ckpt_meta(name: str) -> dict:
+    import torch
+    path = os.path.join(CHECKPOINTS_DIR, name + ".pt")
+    if not os.path.exists(path):
+        path = os.path.join(CHECKPOINTS_DIR, name)
+    if not os.path.exists(path):
+        return {}
+    try:
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        cfg = ckpt.get("model_cfg")
+        size = os.path.getsize(path)
+        params = sum(p.numel() for p in __import__("model.gpt", fromlist=["GPT"]).GPT(cfg).parameters()) if cfg else 0
+        return {
+            "stage": ckpt.get("stage", "pretrain"),
+            "iter_num": ckpt.get("iter_num", 0),
+            "best_val_loss": ckpt.get("best_val_loss", 0.0),
+            "size": size,
+            "params": params,
+            "cfg": cfg,
+        }
+    except Exception:
+        return {}
+
+
+# ─── Commands ─────────────────────────────────────────────────────────────────
+
+def cmd_serve(args):
+    """Start the REST API server."""
+    cmd = [
+        sys.executable, "server.py",
+        "--host", args.host,
+        "--port", str(args.port),
+    ]
+    if args.model:
+        cmd += ["--model", args.model]
+    print(f"{GREEN}Starting AI-local server on http://{args.host}:{args.port}{RESET}")
+    os.execv(sys.executable, cmd)
+
+
+def cmd_list(args):
+    """List available model checkpoints."""
+    models = _discover_models()
+    if not models:
+        print("No models found.")
+        print("Run training pipeline:")
+        print("  python train.py && python finetune_sft.py && python align_dpo.py")
+        return
+
+    print(f"\n{'NAME':<25} {'STAGE':<12} {'PARAMS':<12} {'SIZE':<10} {'VAL LOSS'}")
+    print("─" * 72)
+    for name in models:
+        meta = _load_ckpt_meta(name)
+        stage = meta.get("stage", "?")
+        params = f"{meta.get('params', 0)/1e6:.1f}M" if meta.get("params") else "?"
+        size = _sizeof_fmt(meta.get("size", 0)) if meta.get("size") else "?"
+        val_loss = f"{meta.get('best_val_loss', 0):.4f}" if meta.get("best_val_loss") else "?"
+        print(f"{name:<25} {stage:<12} {params:<12} {size:<10} {val_loss}")
+    print()
+
+
+def cmd_show(args):
+    """Show detailed model info."""
+    import torch
+    name = args.model
+    path = os.path.join(CHECKPOINTS_DIR, name + ".pt")
+    if not os.path.exists(path):
+        path = os.path.join(CHECKPOINTS_DIR, name)
+    if not os.path.exists(path):
+        print(f"Model '{name}' not found.")
+        return
+
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    cfg = ckpt.get("model_cfg")
+    size = os.path.getsize(path)
+
+    print(f"\n{BOLD}Model: {name}{RESET}")
+    print(f"  Path:       {path}")
+    print(f"  Size:       {_sizeof_fmt(size)}")
+    print(f"  Stage:      {ckpt.get('stage', 'pretrain')}")
+    print(f"  Iterations: {ckpt.get('iter_num', 0)}")
+    print(f"  Val loss:   {ckpt.get('best_val_loss', 0):.4f}")
+
+    if cfg:
+        print(f"\n{BOLD}Architecture:{RESET}")
+        for k, v in vars(cfg).items():
+            print(f"  {k:<20} {v}")
+
+        from model.gpt import GPT
+        params = sum(p.numel() for p in GPT(cfg).parameters())
+        print(f"\n  {'parameters':<20} {params/1e6:.2f}M  ({params:,})")
+
+    if cfg:
+        from model.gpt import GPT
+        dpo_beta = ckpt.get("dpo_beta")
+        if dpo_beta:
+            print(f"\n{BOLD}DPO:{RESET}")
+            print(f"  beta: {dpo_beta}")
+    print()
+
+
+def cmd_run(args):
+    """Interactive chat with a model — like `ollama run`."""
+    name = args.model
+    path = os.path.join(CHECKPOINTS_DIR, name + ".pt")
+    if not os.path.exists(path):
+        path = os.path.join(CHECKPOINTS_DIR, name)
+    if not os.path.exists(path):
+        models = _discover_models()
+        if not models:
+            print("No models found. Run training pipeline first.")
+            return
+        name = models[-1]
+        path = os.path.join(CHECKPOINTS_DIR, name + ".pt")
+        print(f"Using latest model: {name}")
+
+    import torch
+    from model.gpt import GPT, GPTConfig
+
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else
+        "mps" if torch.backends.mps.is_available() else "cpu"
+    )
+
+    print(f"Loading {name} ...")
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    model_cfg: GPTConfig = ckpt["model_cfg"]
+    model = GPT(model_cfg).to(device)
+    model.load_state_dict(ckpt["model"])
+    model.eval()
+
+    meta_path = os.path.join(DATA_DIR, "meta.pkl")
+    meta = None
+    if os.path.exists(meta_path):
+        with open(meta_path, "rb") as f:
+            meta = pickle.load(f)
+
+    def encode(text):
+        if meta:
+            stoi = meta["stoi"]
+            fallback = stoi.get(" ", 0)
+            return [stoi.get(c, fallback) for c in text]
+        import tiktoken
+        return tiktoken.get_encoding("gpt2").encode(text)
+
+    def decode(ids):
+        if meta:
+            itos = meta["itos"]
+            return "".join(itos.get(i, "") for i in ids)
+        import tiktoken
+        return tiktoken.get_encoding("gpt2").decode(ids)
+
+    stage = ckpt.get("stage", "pretrain")
+    params = sum(p.numel() for p in model.parameters())
+
+    print(f"\n{GREEN}AI-local{RESET} — {name}  ({stage}, {params/1e6:.1f}M params)")
+    print(f"Type your message, /bye to exit, /clear to reset, /set temp <value>\n")
+
+    temperature = args.temperature
+    top_k = args.top_k
+    history = []
+
+    while True:
+        try:
+            user_input = input(f"{CYAN}>>> {RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nBye!")
+            break
+
+        if not user_input:
+            continue
+        if user_input == "/bye":
+            print("Bye!")
+            break
+        if user_input == "/clear":
+            history.clear()
+            print("History cleared.")
+            continue
+        if user_input.startswith("/set temp "):
+            try:
+                temperature = float(user_input.split()[-1])
+                print(f"Temperature set to {temperature}")
+            except ValueError:
+                print("Usage: /set temp <float>")
+            continue
+        if user_input.startswith("/set top_k "):
+            try:
+                top_k = int(user_input.split()[-1])
+                print(f"top_k set to {top_k}")
+            except ValueError:
+                print("Usage: /set top_k <int>")
+            continue
+        if user_input == "/help":
+            print("/bye    exit  |  /clear  clear history  |  /set temp <f>  |  /set top_k <n>")
+            continue
+
+        # Build prompt with history
+        history.append({"role": "user", "content": user_input})
+        prompt_parts = []
+        for msg in history:
+            if msg["role"] == "user":
+                prompt_parts.append(f"Human: {msg['content']}")
+            else:
+                prompt_parts.append(f"Assistant: {msg['content']}")
+        prompt_parts.append("Assistant: ")
+        prompt_text = "\n\n".join(prompt_parts)
+
+        tokens = encode(prompt_text)
+        idx = torch.tensor([tokens], dtype=torch.long, device=device)
+
+        print(f"{YELLOW}", end="", flush=True)
+        response_chars = []
+        with torch.no_grad():
+            for token_id in model.generate_iter(
+                idx, args.max_tokens, temperature=temperature, top_k=top_k
+            ):
+                char = decode([token_id])
+                response_chars.append(char)
+                print(char, end="", flush=True)
+
+                # Stop at double newline (natural end of response)
+                if "".join(response_chars[-4:]) == "\n\n\n\n":
+                    break
+
+        print(f"{RESET}")
+        response_text = "".join(response_chars).strip()
+        history.append({"role": "assistant", "content": response_text})
+
+
+def cmd_pull(args):
+    """Run training pipeline for a stage."""
+    stage = args.stage.lower()
+    stages = {
+        "pretrain": [
+            ("Preparing data", [sys.executable, "data/prepare.py"]),
+            ("Training (Stage 1: Pre-training)", [sys.executable, "train.py"]),
+        ],
+        "sft": [
+            ("Preparing SFT data", [sys.executable, "data/prepare_sft.py"]),
+            ("Fine-tuning (Stage 2: SFT)", [sys.executable, "finetune_sft.py"]),
+        ],
+        "dpo": [
+            ("Preparing DPO data", [sys.executable, "data/prepare_dpo.py"]),
+            ("Aligning (Stage 3: DPO)", [sys.executable, "align_dpo.py"]),
+        ],
+        "all": [
+            ("Preparing data", [sys.executable, "data/prepare.py"]),
+            ("Training (Stage 1: Pre-training)", [sys.executable, "train.py"]),
+            ("Preparing SFT data", [sys.executable, "data/prepare_sft.py"]),
+            ("Fine-tuning (Stage 2: SFT)", [sys.executable, "finetune_sft.py"]),
+            ("Preparing DPO data", [sys.executable, "data/prepare_dpo.py"]),
+            ("Aligning (Stage 3: DPO)", [sys.executable, "align_dpo.py"]),
+        ],
+    }
+
+    if stage not in stages:
+        print(f"Unknown stage '{stage}'. Valid: pretrain, sft, dpo, all")
+        return
+
+    for label, cmd in stages[stage]:
+        print(f"\n{GREEN}▶ {label}{RESET}")
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            print(f"{YELLOW}Stage failed: {label}{RESET}")
+            sys.exit(1)
+    print(f"\n{GREEN}✓ '{stage}' pipeline complete.{RESET}")
+
+
+def cmd_rm(args):
+    """Delete a model checkpoint."""
+    name = args.model
+    path = os.path.join(CHECKPOINTS_DIR, name + ".pt")
+    if not os.path.exists(path):
+        path = os.path.join(CHECKPOINTS_DIR, name)
+    if not os.path.exists(path):
+        print(f"Model '{name}' not found.")
+        return
+
+    confirm = input(f"Delete '{name}'? [y/N] ").strip().lower()
+    if confirm == "y":
+        os.remove(path)
+        print(f"Deleted {path}")
+    else:
+        print("Cancelled.")
+
+
+def cmd_ps(args):
+    """Show server status (if running)."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f"{SERVER_URL}/api/tags", timeout=2) as r:
+            data = json.loads(r.read())
+        models = data.get("models", [])
+        if models:
+            print(f"\n{'NAME':<25} {'STAGE':<12} {'PARAMS'}")
+            print("─" * 50)
+            for m in models:
+                d = m.get("details", {})
+                print(f"{m['name']:<25} {d.get('stage','?'):<12} {d.get('parameters','?')}")
+        else:
+            print("Server running — no models loaded yet.")
+    except Exception:
+        print(f"Server not running at {SERVER_URL}")
+        print("Start with: python cli.py serve")
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="python cli.py",
+        description="AI-local — Ollama-compatible local LLM CLI",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    # serve
+    p_serve = sub.add_parser("serve", help="Start REST API server")
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=11434)
+    p_serve.add_argument("--model", default="", help="Pre-load this model")
+    p_serve.set_defaults(func=cmd_serve)
+
+    # run
+    p_run = sub.add_parser("run", help="Interactive chat with a model")
+    p_run.add_argument("model", nargs="?", default="", help="Model name (checkpoint without .pt)")
+    p_run.add_argument("--temperature", type=float, default=0.8)
+    p_run.add_argument("--top_k", type=int, default=50)
+    p_run.add_argument("--max_tokens", type=int, default=200)
+    p_run.set_defaults(func=cmd_run)
+
+    # list
+    p_list = sub.add_parser("list", help="List available models")
+    p_list.set_defaults(func=cmd_list)
+
+    # show
+    p_show = sub.add_parser("show", help="Show model details")
+    p_show.add_argument("model", help="Model name")
+    p_show.set_defaults(func=cmd_show)
+
+    # ps
+    p_ps = sub.add_parser("ps", help="Show server status")
+    p_ps.set_defaults(func=cmd_ps)
+
+    # pull
+    p_pull = sub.add_parser("pull", help="Run training pipeline")
+    p_pull.add_argument("stage", choices=["pretrain", "sft", "dpo", "all"],
+                        help="Which stage to run")
+    p_pull.set_defaults(func=cmd_pull)
+
+    # rm
+    p_rm = sub.add_parser("rm", help="Delete a model checkpoint")
+    p_rm.add_argument("model", help="Model name")
+    p_rm.set_defaults(func=cmd_rm)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
