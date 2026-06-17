@@ -2,11 +2,17 @@
 AI-local REST API Server — Ollama-compatible API.
 
 Endpoints:
+  GET  /api/version               — server version
+  GET  /api/tags                  — list available models
+  GET  /api/ps                    — list running (loaded) models
+  POST /api/show                  — model info
+  POST /api/copy                  — copy a model checkpoint
+  DELETE /api/delete              — delete a checkpoint
   POST /api/generate              — text completion (streaming/non-streaming)
   POST /api/chat                  — chat completion (streaming/non-streaming)
-  GET  /api/tags                  — list available models
-  POST /api/show                  — model info
-  DELETE /api/delete              — delete a checkpoint
+  POST /api/embeddings            — generate embeddings (legacy)
+  POST /api/embed                 — generate embeddings (new)
+  POST /api/create                — create model from Modelfile (stub)
 
   POST /v1/chat/completions       — OpenAI-compatible chat
   POST /v1/completions            — OpenAI-compatible completion
@@ -167,6 +173,8 @@ class GenerateRequest(BaseModel):
     top_k: int = 50
     max_tokens: int = 256
     options: dict = Field(default_factory=dict)
+    stop: list[str] = Field(default_factory=list)
+    context: list[int] = Field(default_factory=list)
 
 
 class ChatMessage(BaseModel):
@@ -182,6 +190,7 @@ class ChatRequest(BaseModel):
     top_k: int = 50
     max_tokens: int = 256
     options: dict = Field(default_factory=dict)
+    stop: list[str] = Field(default_factory=list)
 
 
 class ShowRequest(BaseModel):
@@ -194,7 +203,56 @@ class DeleteRequest(BaseModel):
     name: str = ""
 
 
+class CopyRequest(BaseModel):
+    source: str
+    destination: str
+
+
+class EmbeddingsRequest(BaseModel):
+    model: str = ""
+    prompt: str = ""
+    input: str | list[str] = ""
+    options: dict = Field(default_factory=dict)
+
+
+class CreateRequest(BaseModel):
+    model: str = ""
+    name: str = ""
+    modelfile: str = ""
+    stream: bool = False
+
+
 # ─── Ollama-compatible endpoints ──────────────────────────────────────────────
+
+@app.get("/api/version")
+async def api_version():
+    """Ollama-compatible version endpoint."""
+    return {"version": "0.1.0"}
+
+
+@app.get("/api/health")
+async def api_health():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+
+@app.get("/api/ps")
+async def api_ps():
+    """List models currently loaded in memory."""
+    result = []
+    for name, (model, _) in _model_cache.items():
+        try:
+            info = _ckpt_info(name)
+            params = sum(p.numel() for p in model.parameters())
+            result.append({
+                **info,
+                "size_vram": params * 4,  # float32 estimate
+                "expires_at": None,
+            })
+        except Exception:
+            pass
+    return {"models": result}
+
 
 @app.get("/api/tags")
 async def list_models():
@@ -230,20 +288,70 @@ async def delete_model(req: DeleteRequest):
     return {"status": "success"}
 
 
+@app.post("/api/copy")
+async def copy_model(req: CopyRequest):
+    """Copy a model checkpoint to a new name."""
+    import shutil
+    try:
+        src = _resolve_checkpoint(req.source)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    dst_name = req.destination if req.destination.endswith(".pt") else req.destination + ".pt"
+    dst = os.path.join(_checkpoints_dir, os.path.basename(dst_name))
+    if os.path.exists(dst):
+        raise HTTPException(400, f"Destination '{req.destination}' already exists")
+    shutil.copy2(src, dst)
+    return {"status": "success"}
+
+
+async def _status_stream(messages: list[str]) -> AsyncIterator[str]:
+    for msg in messages:
+        yield json.dumps({"status": msg}) + "\n"
+        await asyncio.sleep(0)
+
+
+@app.post("/api/create")
+async def create_model(req: CreateRequest):
+    """Stub — AI-local doesn't support Modelfile syntax yet."""
+    name = req.model or req.name
+    return StreamingResponse(
+        _status_stream([
+            f"Creating model '{name}'...",
+            "Note: Modelfile support is not implemented in AI-local.",
+            "Use 'python cli.py pull <stage>' to train a model.",
+        ]),
+        media_type="application/x-ndjson",
+    )
+
+
 async def _stream_generate(
-    model_name: str, prompt: str, temperature: float, top_k: int, max_tokens: int
+    model_name: str,
+    prompt: str,
+    temperature: float,
+    top_k: int,
+    max_tokens: int,
+    stop: list[str] | None = None,
 ) -> AsyncIterator[str]:
     """Async generator that yields Ollama-style NDJSON chunks."""
+    t_start = time.time()
     model, meta = _load_model(model_name)
+    t_loaded = time.time()
     device = next(model.parameters()).device
 
     tokens = _encode(prompt, meta)
+    prompt_token_count = len(tokens)
     idx = torch.tensor([tokens], dtype=torch.long, device=device)
 
     created_at = datetime.now(tz=timezone.utc).isoformat()
+    stop_seqs = stop or []
+    generated_text = ""
+    eval_count = 0
 
+    t_gen_start = time.time()
     for token_id in model.generate_iter(idx, max_tokens, temperature=temperature, top_k=top_k):
         char = _decode([token_id], meta)
+        generated_text += char
+        eval_count += 1
         chunk = {
             "model": model_name,
             "created_at": created_at,
@@ -251,13 +359,25 @@ async def _stream_generate(
             "done": False,
         }
         yield json.dumps(chunk, ensure_ascii=False) + "\n"
-        await asyncio.sleep(0)  # yield control to event loop
+        await asyncio.sleep(0)
 
+        if stop_seqs and any(s in generated_text for s in stop_seqs):
+            break
+
+    t_end = time.time()
     done_chunk = {
         "model": model_name,
         "created_at": created_at,
         "response": "",
         "done": True,
+        "done_reason": "stop",
+        "context": tokens[-20:],  # last 20 prompt tokens for context reuse
+        "total_duration": int((t_end - t_start) * 1e9),
+        "load_duration": int((t_loaded - t_start) * 1e9),
+        "prompt_eval_count": prompt_token_count,
+        "prompt_eval_duration": int((t_gen_start - t_loaded) * 1e9),
+        "eval_count": eval_count,
+        "eval_duration": int((t_end - t_gen_start) * 1e9),
     }
     yield json.dumps(done_chunk) + "\n"
 
@@ -276,45 +396,67 @@ async def api_generate(req: GenerateRequest):
     top_k = req.options.get("top_k", req.top_k)
     max_tokens = req.options.get("num_predict", req.max_tokens)
 
+    stop = req.stop or req.options.get("stop", [])
+
     try:
         if req.stream:
             return StreamingResponse(
-                _stream_generate(model_name, req.prompt, temperature, top_k, max_tokens),
+                _stream_generate(model_name, req.prompt, temperature, top_k, max_tokens, stop),
                 media_type="application/x-ndjson",
             )
         else:
-            # Collect full response
             full = ""
-            async for chunk in _stream_generate(model_name, req.prompt, temperature, top_k, max_tokens):
+            done_data = {}
+            async for chunk in _stream_generate(model_name, req.prompt, temperature, top_k, max_tokens, stop):
                 data = json.loads(chunk)
                 full += data.get("response", "")
+                if data.get("done"):
+                    done_data = data
             return {
                 "model": model_name,
                 "created_at": datetime.now(tz=timezone.utc).isoformat(),
                 "response": full,
                 "done": True,
+                "done_reason": "stop",
+                "context": done_data.get("context", []),
+                "total_duration": done_data.get("total_duration", 0),
+                "load_duration": done_data.get("load_duration", 0),
+                "prompt_eval_count": done_data.get("prompt_eval_count", 0),
+                "eval_count": done_data.get("eval_count", 0),
             }
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
 
 
 async def _stream_chat(
-    model_name: str, messages: list[dict], temperature: float, top_k: int, max_tokens: int
+    model_name: str,
+    messages: list[dict],
+    temperature: float,
+    top_k: int,
+    max_tokens: int,
+    stop: list[str] | None = None,
 ) -> AsyncIterator[str]:
     """Async generator for chat streaming — Ollama-style."""
+    t_start = time.time()
     model, meta = _load_model(model_name)
+    t_loaded = time.time()
     device = next(model.parameters()).device
 
     prompt = _format_prompt_chat(messages)
     tokens = _encode(prompt, meta)
+    prompt_token_count = len(tokens)
     idx = torch.tensor([tokens], dtype=torch.long, device=device)
 
     created_at = datetime.now(tz=timezone.utc).isoformat()
-    full_response = ""
+    stop_seqs = stop or []
+    generated_text = ""
+    eval_count = 0
 
+    t_gen_start = time.time()
     for token_id in model.generate_iter(idx, max_tokens, temperature=temperature, top_k=top_k):
         char = _decode([token_id], meta)
-        full_response += char
+        generated_text += char
+        eval_count += 1
         chunk = {
             "model": model_name,
             "created_at": created_at,
@@ -324,12 +466,22 @@ async def _stream_chat(
         yield json.dumps(chunk, ensure_ascii=False) + "\n"
         await asyncio.sleep(0)
 
+        if stop_seqs and any(s in generated_text for s in stop_seqs):
+            break
+
+    t_end = time.time()
     done_chunk = {
         "model": model_name,
         "created_at": created_at,
         "message": {"role": "assistant", "content": ""},
         "done": True,
         "done_reason": "stop",
+        "total_duration": int((t_end - t_start) * 1e9),
+        "load_duration": int((t_loaded - t_start) * 1e9),
+        "prompt_eval_count": prompt_token_count,
+        "prompt_eval_duration": int((t_gen_start - t_loaded) * 1e9),
+        "eval_count": eval_count,
+        "eval_duration": int((t_end - t_gen_start) * 1e9),
     }
     yield json.dumps(done_chunk) + "\n"
 
@@ -348,26 +500,103 @@ async def api_chat(req: ChatRequest):
     temperature = req.options.get("temperature", req.temperature)
     top_k = req.options.get("top_k", req.top_k)
     max_tokens = req.options.get("num_predict", req.max_tokens)
+    stop = req.stop or req.options.get("stop", [])
 
     try:
         if req.stream:
             return StreamingResponse(
-                _stream_chat(model_name, messages, temperature, top_k, max_tokens),
+                _stream_chat(model_name, messages, temperature, top_k, max_tokens, stop),
                 media_type="application/x-ndjson",
             )
         else:
             full = ""
-            async for chunk in _stream_chat(model_name, messages, temperature, top_k, max_tokens):
+            done_data = {}
+            async for chunk in _stream_chat(model_name, messages, temperature, top_k, max_tokens, stop):
                 data = json.loads(chunk)
                 full += data.get("message", {}).get("content", "")
+                if data.get("done"):
+                    done_data = data
             return {
                 "model": model_name,
                 "created_at": datetime.now(tz=timezone.utc).isoformat(),
                 "message": {"role": "assistant", "content": full},
                 "done": True,
+                "done_reason": "stop",
+                "total_duration": done_data.get("total_duration", 0),
+                "load_duration": done_data.get("load_duration", 0),
+                "prompt_eval_count": done_data.get("prompt_eval_count", 0),
+                "eval_count": done_data.get("eval_count", 0),
             }
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
+
+
+def _get_embedding(model_name: str, text: str) -> list[float]:
+    """Return mean-pooled hidden state as embedding vector."""
+    model, meta = _load_model(model_name)
+    device = next(model.parameters()).device
+    tokens = _encode(text, meta)
+    if not tokens:
+        tokens = [0]
+    idx = torch.tensor([tokens], dtype=torch.long, device=device)
+
+    with torch.no_grad():
+        B, T = idx.size()
+        pos = torch.arange(0, T, dtype=torch.long, device=device)
+        x = model.transformer.drop(model.transformer.wte(idx) + model.transformer.wpe(pos))
+        for block in model.transformer.h:
+            x = block(x)
+        x = model.transformer.ln_f(x)
+        embedding = x[0].mean(dim=0)  # mean pool over sequence
+
+    return embedding.tolist()
+
+
+@app.post("/api/embeddings")
+async def api_embeddings(req: EmbeddingsRequest):
+    """Ollama /api/embeddings — generate embedding vector (legacy)."""
+    model_name = req.model or _default_model
+    if not model_name:
+        models = _discover_models()
+        if not models:
+            raise HTTPException(404, "No models found.")
+        model_name = models[-1]
+
+    text = req.prompt if req.prompt else (req.input if isinstance(req.input, str) else req.input[0] if req.input else "")
+    try:
+        embedding = _get_embedding(model_name, text)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+    return {"embedding": embedding, "model": model_name}
+
+
+@app.post("/api/embed")
+async def api_embed(req: EmbeddingsRequest):
+    """Ollama /api/embed — generate embeddings (new multi-input endpoint)."""
+    model_name = req.model or _default_model
+    if not model_name:
+        models = _discover_models()
+        if not models:
+            raise HTTPException(404, "No models found.")
+        model_name = models[-1]
+
+    inputs = req.input if req.input else ([req.prompt] if req.prompt else [""])
+    if isinstance(inputs, str):
+        inputs = [inputs]
+
+    try:
+        embeddings = [_get_embedding(model_name, text) for text in inputs]
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+    return {
+        "model": model_name,
+        "embeddings": embeddings,
+        "total_duration": 0,
+        "load_duration": 0,
+        "prompt_eval_count": len(inputs),
+    }
 
 
 # ─── OpenAI-compatible endpoints ─────────────────────────────────────────────
@@ -476,6 +705,39 @@ async def oai_chat_completions(req: OAIChatRequest):
         raise HTTPException(404, str(e))
 
 
+class OAIEmbeddingRequest(BaseModel):
+    model: str = ""
+    input: str | list[str] = ""
+    encoding_format: str = "float"
+
+
+@app.post("/v1/embeddings")
+async def oai_embeddings(req: OAIEmbeddingRequest):
+    """OpenAI-compatible embeddings endpoint."""
+    model_name = req.model or _default_model
+    if not model_name:
+        models = _discover_models()
+        if not models:
+            raise HTTPException(404, "No models found.")
+        model_name = models[-1]
+
+    inputs = req.input if isinstance(req.input, list) else [req.input]
+    try:
+        data = [
+            {"object": "embedding", "index": i, "embedding": _get_embedding(model_name, text)}
+            for i, text in enumerate(inputs)
+        ]
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+    return {
+        "object": "list",
+        "data": data,
+        "model": model_name,
+        "usage": {"prompt_tokens": sum(len(t) for t in inputs), "total_tokens": sum(len(t) for t in inputs)},
+    }
+
+
 @app.post("/v1/completions")
 async def oai_completions(req: OAICompletionRequest):
     """OpenAI-compatible text completions."""
@@ -506,7 +768,12 @@ async def oai_completions(req: OAICompletionRequest):
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "name": "ai-local", "version": "0.1.0"}
+    return "Ollama is running"
+
+
+@app.head("/")
+async def root_head():
+    return {}
 
 
 # ─── CLI entry point ──────────────────────────────────────────────────────────
