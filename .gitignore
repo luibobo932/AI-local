@@ -1,6 +1,6 @@
 checkpoints/
 data/*.bin
 data/*.txt
-data/meta.pkl
+data/*.pkl
 __pycache__/
 *.pyc

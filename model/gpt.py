@@ -175,6 +175,17 @@ class GPT(nn.Module):
 
         return logits, loss
 
+    def forward_full(self, idx: torch.Tensor) -> torch.Tensor:
+        """Return logits for ALL token positions — used by DPO/RLHF training."""
+        B, T = idx.size()
+        device = idx.device
+        pos = torch.arange(0, T, dtype=torch.long, device=device)
+        x = self.transformer.drop(self.transformer.wte(idx) + self.transformer.wpe(pos))
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        return self.lm_head(x)  # (B, T, vocab_size)
+
     @torch.no_grad()
     def generate(
         self,

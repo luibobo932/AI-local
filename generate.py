@@ -119,6 +119,75 @@ def generate(
             print(f"\n{'─' * 60} [{i+1}/{num_samples}]")
 
 
+def chat(
+    checkpoint: str = "checkpoints/dpo_ckpt.pt",
+    num_tokens: int = 200,
+    temperature: float = 0.7,
+    top_k: int = 40,
+    data_dir: str = "data",
+    device_str: str = "auto",
+):
+    """Interactive chat mode — dùng sau khi hoàn thành SFT + DPO."""
+    if device_str == "auto":
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+    else:
+        device = torch.device(device_str)
+
+    if not os.path.exists(checkpoint):
+        raise FileNotFoundError(
+            f"Checkpoint not found: {checkpoint}\n"
+            "Run the full pipeline:\n"
+            "  python data/prepare.py && python train.py\n"
+            "  python data/prepare_sft.py && python finetune_sft.py\n"
+            "  python data/prepare_dpo.py && python align_dpo.py"
+        )
+
+    print(f"Loading model: {checkpoint}")
+    model, _ = load_checkpoint(checkpoint, device)
+    meta = load_meta(data_dir)
+
+    ckpt_info = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    stage = ckpt_info.get("stage", "pretrain")
+    print(f"Stage: {stage} | {model.num_parameters()/1e6:.2f}M params")
+    print("─" * 50)
+    print("Chat mode — type your message, Ctrl+C to exit.")
+    print("─" * 50)
+
+    while True:
+        try:
+            user_input = input("\nYou: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nGoodbye.")
+            break
+
+        if not user_input:
+            continue
+
+        prompt_text = f"Human: {user_input}\n\nAssistant: "
+        tokens = encode_prompt(prompt_text, meta)
+        if not tokens:
+            tokens = [0]
+
+        x = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0)
+        y = model.generate(x, max_new_tokens=num_tokens, temperature=temperature, top_k=top_k)
+        full_text = decode_tokens(y[0].tolist(), meta)
+
+        # Extract only the assistant's response
+        marker = "Assistant: "
+        response_start = full_text.rfind(marker)
+        if response_start != -1:
+            response = full_text[response_start + len(marker):].strip()
+        else:
+            response = full_text[len(prompt_text):].strip()
+
+        print(f"Assistant: {response}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, default="checkpoints/ckpt.pt")
@@ -130,16 +199,27 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=str, default="data")
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--chat", action="store_true", help="Interactive chat mode (dùng sau SFT+DPO)")
     args = parser.parse_args()
 
-    generate(
-        checkpoint=args.checkpoint,
-        prompt=args.prompt,
-        num_tokens=args.num_tokens,
-        temperature=args.temperature,
-        top_k=args.top_k,
-        num_samples=args.num_samples,
-        data_dir=args.data_dir,
-        device_str=args.device,
-        seed=args.seed,
-    )
+    if args.chat:
+        chat(
+            checkpoint=args.checkpoint,
+            num_tokens=args.num_tokens,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            data_dir=args.data_dir,
+            device_str=args.device,
+        )
+    else:
+        generate(
+            checkpoint=args.checkpoint,
+            prompt=args.prompt,
+            num_tokens=args.num_tokens,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            num_samples=args.num_samples,
+            data_dir=args.data_dir,
+            device_str=args.device,
+            seed=args.seed,
+        )
