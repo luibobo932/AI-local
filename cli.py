@@ -157,20 +157,38 @@ def cmd_show(args):
 
 def cmd_run(args):
     """Interactive chat with a model — like `ollama run`."""
+    import torch
+    from model.hf_backend import is_hf_model, HFModel
+
     name = args.model
+
+    # HuggingFace model
+    if name and is_hf_model(name):
+        model = HFModel(name)
+        stage = "hf"
+        params = sum(p.numel() for p in model.parameters())
+
+        def encode(text): return model.encode(text)
+        def decode(ids): return model.decode(ids)
+
+        print(f"\n{GREEN}AI-local{RESET} — {name}  (HuggingFace, {params/1e6:.0f}M params)")
+        print(f"Type your message, /bye to exit, /clear to reset, /set temp <value>\n")
+        _run_chat_loop(model, encode, decode, args)
+        return
+
+    # Local checkpoint
     path = os.path.join(CHECKPOINTS_DIR, name + ".pt")
     if not os.path.exists(path):
         path = os.path.join(CHECKPOINTS_DIR, name)
     if not os.path.exists(path):
         models = _discover_models()
         if not models:
-            print("No models found. Run training pipeline first.")
+            print("No models found. Run: python cli.py pull pretrain")
             return
         name = models[-1]
         path = os.path.join(CHECKPOINTS_DIR, name + ".pt")
         print(f"Using latest model: {name}")
 
-    import torch
     from model.gpt import GPT, GPTConfig
 
     device = torch.device(
@@ -211,7 +229,14 @@ def cmd_run(args):
 
     print(f"\n{GREEN}AI-local{RESET} — {name}  ({stage}, {params/1e6:.1f}M params)")
     print(f"Type your message, /bye to exit, /clear to reset, /set temp <value>\n")
+    _run_chat_loop(model, encode, decode, args)
 
+
+def _run_chat_loop(model, encode, decode, args):
+    """Shared interactive chat loop for both local and HuggingFace models."""
+    import torch
+
+    device = next(model.parameters()).device
     temperature = args.temperature
     top_k = args.top_k
     history = []
@@ -250,7 +275,6 @@ def cmd_run(args):
             print("/bye    exit  |  /clear  clear history  |  /set temp <f>  |  /set top_k <n>")
             continue
 
-        # Build prompt with history
         history.append({"role": "user", "content": user_input})
         prompt_parts = []
         for msg in history:
@@ -274,7 +298,6 @@ def cmd_run(args):
                 response_chars.append(char)
                 print(char, end="", flush=True)
 
-                # Stop at double newline (natural end of response)
                 if "".join(response_chars[-4:]) == "\n\n\n\n":
                     break
 
@@ -284,8 +307,16 @@ def cmd_run(args):
 
 
 def cmd_pull(args):
-    """Run training pipeline for a stage."""
+    """Download a HuggingFace model OR run training pipeline for a stage."""
     stage = args.stage.lower()
+
+    # HuggingFace model download
+    from model.hf_backend import is_hf_model
+    if is_hf_model(stage) or stage.startswith("hf:"):
+        model_id = stage.removeprefix("hf:")
+        _pull_hf_model(model_id)
+        return
+
     stages = {
         "pretrain": [
             ("Preparing data", [sys.executable, "data/prepare.py"]),
@@ -310,7 +341,9 @@ def cmd_pull(args):
     }
 
     if stage not in stages:
-        print(f"Unknown stage '{stage}'. Valid: pretrain, sft, dpo, all")
+        print(f"Unknown stage '{stage}'.")
+        print("Training stages: pretrain, sft, dpo, all")
+        print("HuggingFace models: gpt2, gpt2-medium, distilgpt2, or any repo/model-id")
         return
 
     for label, cmd in stages[stage]:
@@ -320,6 +353,30 @@ def cmd_pull(args):
             print(f"{YELLOW}Stage failed: {label}{RESET}")
             sys.exit(1)
     print(f"\n{GREEN}✓ '{stage}' pipeline complete.{RESET}")
+
+
+def _pull_hf_model(model_id: str):
+    """Download and cache a HuggingFace model."""
+    try:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError:
+        print("transformers not installed. Run: pip install transformers")
+        sys.exit(1)
+
+    print(f"{GREEN}Pulling {model_id} from HuggingFace...{RESET}")
+    print("(model will be cached in ~/.cache/huggingface/)\n")
+    try:
+        print("Downloading tokenizer...")
+        AutoTokenizer.from_pretrained(model_id)
+        print("Downloading model weights...")
+        AutoModelForCausalLM.from_pretrained(model_id)
+        print(f"\n{GREEN}✓ {model_id} downloaded successfully.{RESET}")
+        print(f"\nRun it:")
+        print(f"  python cli.py run {model_id}")
+        print(f"  python cli.py serve  →  use model '{model_id}' in API requests")
+    except Exception as e:
+        print(f"{YELLOW}Download failed: {e}{RESET}")
+        sys.exit(1)
 
 
 def cmd_rm(args):
@@ -398,9 +455,9 @@ def main():
     p_ps.set_defaults(func=cmd_ps)
 
     # pull
-    p_pull = sub.add_parser("pull", help="Run training pipeline")
-    p_pull.add_argument("stage", choices=["pretrain", "sft", "dpo", "all"],
-                        help="Which stage to run")
+    p_pull = sub.add_parser("pull", help="Download HuggingFace model or run training pipeline")
+    p_pull.add_argument("stage",
+                        help="Training stage (pretrain/sft/dpo/all) OR HuggingFace model id (gpt2, distilgpt2, ...)")
     p_pull.set_defaults(func=cmd_pull)
 
     # rm

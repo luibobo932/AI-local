@@ -41,6 +41,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from model.gpt import GPT, GPTConfig
+from model.hf_backend import HFModel, is_hf_model
 
 # ─── App ─────────────────────────────────────────────────────────────────────
 
@@ -48,16 +49,18 @@ app = FastAPI(title="AI-local", description="Ollama-compatible local LLM server"
 
 # ─── Model registry (loaded on demand, cached in memory) ─────────────────────
 
-_model_cache: dict[str, tuple[GPT, dict | None]] = {}
+_model_cache: dict[str, tuple] = {}   # name → (model, meta_or_None)
 _data_dir = "data"
 _checkpoints_dir = "checkpoints"
 _default_model = ""
 
 
 def _discover_models() -> list[str]:
-    """Return list of checkpoint names (without .pt extension)."""
+    """Return checkpoint names + any cached HF models."""
     paths = glob.glob(os.path.join(_checkpoints_dir, "*.pt"))
-    return [os.path.splitext(os.path.basename(p))[0] for p in sorted(paths)]
+    local = [os.path.splitext(os.path.basename(p))[0] for p in sorted(paths)]
+    hf_cached = [n for n in _model_cache if is_hf_model(n)]
+    return local + [n for n in hf_cached if n not in local]
 
 
 def _resolve_checkpoint(model_name: str) -> str:
@@ -73,10 +76,16 @@ def _resolve_checkpoint(model_name: str) -> str:
     raise FileNotFoundError(f"Model '{model_name}' not found in {_checkpoints_dir}/")
 
 
-def _load_model(model_name: str) -> tuple[GPT, dict | None]:
-    """Load (and cache) a model checkpoint."""
+def _load_model(model_name: str) -> tuple:
+    """Load (and cache) a model — either local checkpoint or HuggingFace."""
     if model_name in _model_cache:
         return _model_cache[model_name]
+
+    # HuggingFace model (gpt2, distilgpt2, microsoft/phi-2, etc.)
+    if is_hf_model(model_name):
+        hf = HFModel(model_name)
+        _model_cache[model_name] = (hf, None)
+        return hf, None
 
     ckpt_path = _resolve_checkpoint(model_name)
     device = torch.device("cuda" if torch.cuda.is_available() else
@@ -99,23 +108,25 @@ def _load_model(model_name: str) -> tuple[GPT, dict | None]:
     return model, meta
 
 
-def _encode(text: str, meta: dict | None) -> list[int]:
+def _encode(text: str, meta: dict | None, model=None) -> list[int]:
+    if isinstance(model, HFModel):
+        return model.encode(text)
     if meta:
         stoi = meta["stoi"]
         fallback = stoi.get(" ", 0)
         return [stoi.get(c, fallback) for c in text]
     import tiktoken
-    enc = tiktoken.get_encoding("gpt2")
-    return enc.encode(text)
+    return tiktoken.get_encoding("gpt2").encode(text)
 
 
-def _decode(ids: list[int], meta: dict | None) -> str:
+def _decode(ids: list[int], meta: dict | None, model=None) -> str:
+    if isinstance(model, HFModel):
+        return model.decode(ids)
     if meta:
         itos = meta["itos"]
         return "".join(itos.get(i, "") for i in ids)
     import tiktoken
-    enc = tiktoken.get_encoding("gpt2")
-    return enc.decode(ids)
+    return tiktoken.get_encoding("gpt2").decode(ids)
 
 
 def _format_prompt_chat(messages: list[dict]) -> str:
@@ -135,6 +146,27 @@ def _format_prompt_chat(messages: list[dict]) -> str:
 
 
 def _ckpt_info(name: str) -> dict:
+    # HuggingFace model already loaded in cache
+    if is_hf_model(name) and name in _model_cache:
+        hf: HFModel = _model_cache[name][0]
+        cfg = hf.cfg
+        params = sum(p.numel() for p in hf.parameters())
+        return {
+            "name": name,
+            "model": name,
+            "modified_at": datetime.now(tz=timezone.utc).isoformat(),
+            "size": params * 4,
+            "details": {
+                "stage": "hf",
+                "n_layer": cfg.n_layer,
+                "n_head": cfg.n_head,
+                "n_embd": cfg.n_embd,
+                "block_size": cfg.block_size,
+                "vocab_size": cfg.vocab_size,
+                "parameters": f"{params / 1e6:.2f}M",
+                "source": "huggingface",
+            },
+        }
     try:
         path = _resolve_checkpoint(name)
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
@@ -338,7 +370,7 @@ async def _stream_generate(
     t_loaded = time.time()
     device = next(model.parameters()).device
 
-    tokens = _encode(prompt, meta)
+    tokens = _encode(prompt, meta, model)
     prompt_token_count = len(tokens)
     idx = torch.tensor([tokens], dtype=torch.long, device=device)
 
@@ -349,7 +381,7 @@ async def _stream_generate(
 
     t_gen_start = time.time()
     for token_id in model.generate_iter(idx, max_tokens, temperature=temperature, top_k=top_k):
-        char = _decode([token_id], meta)
+        char = _decode([token_id], meta, model)
         generated_text += char
         eval_count += 1
         chunk = {
@@ -443,7 +475,7 @@ async def _stream_chat(
     device = next(model.parameters()).device
 
     prompt = _format_prompt_chat(messages)
-    tokens = _encode(prompt, meta)
+    tokens = _encode(prompt, meta, model)
     prompt_token_count = len(tokens)
     idx = torch.tensor([tokens], dtype=torch.long, device=device)
 
@@ -454,7 +486,7 @@ async def _stream_chat(
 
     t_gen_start = time.time()
     for token_id in model.generate_iter(idx, max_tokens, temperature=temperature, top_k=top_k):
-        char = _decode([token_id], meta)
+        char = _decode([token_id], meta, model)
         generated_text += char
         eval_count += 1
         chunk = {
@@ -535,10 +567,17 @@ def _get_embedding(model_name: str, text: str) -> list[float]:
     """Return mean-pooled hidden state as embedding vector."""
     model, meta = _load_model(model_name)
     device = next(model.parameters()).device
-    tokens = _encode(text, meta)
+    tokens = _encode(text, meta, model)
     if not tokens:
         tokens = [0]
     idx = torch.tensor([tokens], dtype=torch.long, device=device)
+
+    if isinstance(model, HFModel):
+        # Use HF model's hidden states
+        with torch.no_grad():
+            out = model.hf_model(input_ids=idx, output_hidden_states=True)
+            embedding = out.hidden_states[-1][0].mean(dim=0)
+        return embedding.tolist()
 
     with torch.no_grad():
         B, T = idx.size()
@@ -547,7 +586,7 @@ def _get_embedding(model_name: str, text: str) -> list[float]:
         for block in model.transformer.h:
             x = block(x)
         x = model.transformer.ln_f(x)
-        embedding = x[0].mean(dim=0)  # mean pool over sequence
+        embedding = x[0].mean(dim=0)
 
     return embedding.tolist()
 
@@ -644,11 +683,11 @@ async def _oai_stream_chat(model_name, messages, temperature, top_k, max_tokens)
     device = next(model.parameters()).device
 
     prompt = _format_prompt_chat(messages)
-    tokens = _encode(prompt, meta)
+    tokens = _encode(prompt, meta, model)
     idx = torch.tensor([tokens], dtype=torch.long, device=device)
 
     for token_id in model.generate_iter(idx, max_tokens, temperature=temperature, top_k=top_k):
-        char = _decode([token_id], meta)
+        char = _decode([token_id], meta, model)
         chunk = {
             "id": request_id,
             "object": "chat.completion.chunk",
