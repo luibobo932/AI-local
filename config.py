@@ -20,6 +20,12 @@ class TrainConfig:
     data_dir: str = "data"
     out_dir: str = "checkpoints"
 
+    # Model architecture overrides (default = GPTConfig defaults)
+    block_size: int = 256
+    n_layer: int = 6
+    n_head: int = 6
+    n_embd: int = 384
+
     # Training
     max_iters: int = 5000
     eval_interval: int = 500

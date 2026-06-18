@@ -116,8 +116,14 @@ def train(cfg: TrainConfig):
         vocab_size = 50304   # BPE padded
         print(f"BPE vocab: {vocab_size} tokens")
 
-    # Model
-    model_cfg = GPTConfig(vocab_size=vocab_size)
+    # Model — arch overrides from cfg if provided
+    model_cfg = GPTConfig(
+        vocab_size=vocab_size,
+        block_size=cfg.block_size,
+        n_layer=cfg.n_layer,
+        n_head=cfg.n_head,
+        n_embd=cfg.n_embd,
+    )
     iter_num = 0
     best_val_loss = float("inf")
 
