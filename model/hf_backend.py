@@ -17,8 +17,11 @@ Usage:
 """
 
 from __future__ import annotations
+import os
 import torch
 
+
+MODELS_DIR = "models"
 
 # HF model IDs we treat as "known" for auto-detect
 _HF_ALIASES = {
@@ -30,9 +33,24 @@ _HF_ALIASES = {
 }
 
 
+def local_model_dir(name: str) -> str | None:
+    """Nếu `name` là một model fine-tune lưu trong models/<name>/, trả về đường dẫn."""
+    d = os.path.join(MODELS_DIR, name)
+    if os.path.isdir(d) and os.path.exists(os.path.join(d, "config.json")):
+        return d
+    # Đường dẫn trực tiếp tới một thư mục HF model
+    if os.path.isdir(name) and os.path.exists(os.path.join(name, "config.json")):
+        return name
+    return None
+
+
 def is_hf_model(name: str) -> bool:
-    """Return True if name looks like a HuggingFace model id."""
+    """Return True if name looks like a HuggingFace model id or a local HF dir."""
+    if not name:
+        return False
     if name in _HF_ALIASES:
+        return True
+    if local_model_dir(name):
         return True
     # repo/model-name format (e.g. microsoft/phi-2)
     if "/" in name and not name.startswith("/") and not name.endswith(".pt"):
@@ -49,16 +67,19 @@ class HFModel:
     def __init__(self, model_id: str, device: torch.device | None = None):
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
+        # Model fine-tune local trong models/<name>/ — load từ thư mục đó
+        resolved = local_model_dir(model_id) or model_id
+
         self.model_id = model_id
         self.device = device or torch.device(
             "cuda" if torch.cuda.is_available() else
             "mps" if torch.backends.mps.is_available() else "cpu"
         )
 
-        print(f"Loading HuggingFace model: {model_id} ...")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        print(f"Loading HuggingFace model: {resolved} ...")
+        self.tokenizer = AutoTokenizer.from_pretrained(resolved)
         self.hf_model = AutoModelForCausalLM.from_pretrained(
-            model_id,
+            resolved,
             torch_dtype=torch.float16 if self.device.type == "cuda" else torch.float32,
         ).to(self.device)
         self.hf_model.eval()

@@ -1,4 +1,5 @@
 checkpoints/
+models/
 data/*.bin
 data/*.txt
 data/*.pkl

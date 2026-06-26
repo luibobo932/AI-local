@@ -56,11 +56,19 @@ _default_model = ""
 
 
 def _discover_models() -> list[str]:
-    """Return checkpoint names + any cached HF models."""
+    """Return checkpoint names + fine-tuned models + any cached HF models."""
     paths = glob.glob(os.path.join(_checkpoints_dir, "*.pt"))
-    local = [os.path.splitext(os.path.basename(p))[0] for p in sorted(paths)]
-    hf_cached = [n for n in _model_cache if is_hf_model(n)]
-    return local + [n for n in hf_cached if n not in local]
+    names = [os.path.splitext(os.path.basename(p))[0] for p in sorted(paths)]
+    # Fine-tuned models saved in models/<name>/
+    if os.path.isdir("models"):
+        for d in sorted(os.listdir("models")):
+            if os.path.exists(os.path.join("models", d, "config.json")) and d not in names:
+                names.append(d)
+    # HF models currently loaded in memory
+    for n in _model_cache:
+        if is_hf_model(n) and n not in names:
+            names.append(n)
+    return names
 
 
 def _resolve_checkpoint(model_name: str) -> str:

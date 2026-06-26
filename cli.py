@@ -30,6 +30,7 @@ import time
 
 
 CHECKPOINTS_DIR = "checkpoints"
+MODELS_DIR = "models"
 DATA_DIR = "data"
 SERVER_URL = "http://127.0.0.1:11434"
 
@@ -44,7 +45,13 @@ BOLD   = "\033[1m"
 
 def _discover_models() -> list[str]:
     paths = glob.glob(os.path.join(CHECKPOINTS_DIR, "*.pt"))
-    return [os.path.splitext(os.path.basename(p))[0] for p in sorted(paths)]
+    names = [os.path.splitext(os.path.basename(p))[0] for p in sorted(paths)]
+    # Model fine-tune lưu trong models/<name>/ (thư mục có config.json)
+    if os.path.isdir(MODELS_DIR):
+        for d in sorted(os.listdir(MODELS_DIR)):
+            if os.path.exists(os.path.join(MODELS_DIR, d, "config.json")):
+                names.append(d)
+    return names
 
 
 def _sizeof_fmt(num: int) -> str:
@@ -379,9 +386,43 @@ def _pull_hf_model(model_id: str):
         sys.exit(1)
 
 
+def cmd_finetune(args):
+    """Fine-tune a pre-trained model on your own data — 'make it your own'."""
+    cmd = [
+        sys.executable, "finetune_hf.py",
+        "--base", args.base,
+        "--out", args.out,
+        "--epochs", str(args.epochs),
+        "--batch_size", str(args.batch_size),
+        "--learning_rate", str(args.learning_rate),
+    ]
+    if args.data:
+        cmd += ["--data", args.data]
+    if args.lora:
+        cmd.append("--lora")
+    if args.merge:
+        cmd.append("--merge")
+    print(f"{GREEN}▶ Fine-tuning '{args.base}' → '{args.out}'{RESET}")
+    result = subprocess.run(cmd)
+    sys.exit(result.returncode)
+
+
 def cmd_rm(args):
-    """Delete a model checkpoint."""
+    """Delete a model checkpoint or fine-tuned model directory."""
+    import shutil
     name = args.model
+
+    # Fine-tuned model directory?
+    mdir = os.path.join(MODELS_DIR, name)
+    if os.path.isdir(mdir):
+        confirm = input(f"Delete fine-tuned model '{name}' (dir {mdir})? [y/N] ").strip().lower()
+        if confirm == "y":
+            shutil.rmtree(mdir)
+            print(f"Deleted {mdir}")
+        else:
+            print("Cancelled.")
+        return
+
     path = os.path.join(CHECKPOINTS_DIR, name + ".pt")
     if not os.path.exists(path):
         path = os.path.join(CHECKPOINTS_DIR, name)
@@ -459,6 +500,18 @@ def main():
     p_pull.add_argument("stage",
                         help="Training stage (pretrain/sft/dpo/all) OR HuggingFace model id (gpt2, distilgpt2, ...)")
     p_pull.set_defaults(func=cmd_pull)
+
+    # finetune
+    p_ft = sub.add_parser("finetune", help="Fine-tune a pre-trained model on your own data")
+    p_ft.add_argument("--base", default="gpt2", help="Base model (gpt2, distilgpt2, repo/id, models/<dir>)")
+    p_ft.add_argument("--data", default="", help="Your JSONL data ({instruction, response}). Empty = built-in")
+    p_ft.add_argument("--out", default="my-model", help="Output model name (saved to models/<out>/)")
+    p_ft.add_argument("--epochs", type=int, default=5)
+    p_ft.add_argument("--batch_size", type=int, default=4)
+    p_ft.add_argument("--learning_rate", type=float, default=2e-5)
+    p_ft.add_argument("--lora", action="store_true", help="Use LoRA (lighter, for big models)")
+    p_ft.add_argument("--merge", action="store_true", help="Merge LoRA into base when saving")
+    p_ft.set_defaults(func=cmd_finetune)
 
     # rm
     p_rm = sub.add_parser("rm", help="Delete a model checkpoint")
