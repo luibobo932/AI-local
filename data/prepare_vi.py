@@ -75,7 +75,54 @@ Mỗi sáng tôi tập thể dục, ăn sáng rồi đi làm đúng giờ.
 Cuối tuần tôi thường về thăm ông bà và giúp mẹ dọn nhà.
 Hà Nội mùa thu có hương hoa sữa nồng nàn trên từng góc phố.
 Biển xanh cát trắng nắng vàng, sóng vỗ rì rào bên bờ cát mịn.
+Việt Nam là một đất nước xinh đẹp nằm ở khu vực Đông Nam Á.
+Thủ đô của Việt Nam là Hà Nội, một thành phố nghìn năm văn hiến.
+Thành phố Hồ Chí Minh là trung tâm kinh tế lớn nhất cả nước.
+Vịnh Hạ Long với hàng nghìn hòn đảo đá vôi là kỳ quan thiên nhiên.
+Cố đô Huế trầm mặc bên dòng sông Hương thơ mộng và hiền hòa.
+Phố cổ Hội An lung linh ánh đèn lồng mỗi đêm rằm tháng giêng.
+Ruộng bậc thang Sa Pa mùa lúa chín vàng óng cả triền núi cao.
+Đồng bằng sông Cửu Long trù phú với những vườn cây trái sum suê.
+Áo dài là trang phục truyền thống duyên dáng của người phụ nữ Việt.
+Nón lá che nắng che mưa, gắn bó với người dân quê bao đời nay.
+Mỗi ngày tôi học một điều mới và cố gắng tiến bộ hơn hôm qua.
+Sức khỏe là vàng, hãy ăn uống điều độ và tập thể dục thường xuyên.
+Thời gian là thứ quý giá nhất, hãy dùng nó một cách khôn ngoan.
+Gia đình là nơi bình yên nhất để ta trở về sau ngày dài mệt mỏi.
+Tình bạn chân thành được xây dựng trên sự tin tưởng và sẻ chia.
+Lời nói chẳng mất tiền mua, lựa lời mà nói cho vừa lòng nhau.
+Đi một ngày đàng học một sàng khôn, hãy mở lòng với thế giới.
+Cây ngay không sợ chết đứng, sống ngay thẳng thì chẳng sợ điều gì.
+Mùa xuân cây cối đâm chồi nảy lộc, vạn vật bừng tỉnh sau giấc đông.
+Mùa hạ ve kêu râm ran, phượng nở đỏ rực một góc sân trường.
+Mùa thu lá vàng rơi xào xạc, bầu trời cao và trong xanh vời vợi.
+Mùa đông gió lạnh tràn về, mọi người khoác thêm chiếc áo ấm dày.
+Buổi chợ quê sáng sớm đông vui, tiếng người mua kẻ bán rộn ràng.
+Bác nông dân gánh rau ra chợ, nụ cười hiền hậu trên gương mặt sạm nắng.
+Em bé tập đi chập chững, đôi tay nhỏ xíu níu lấy vạt áo mẹ.
+Ông mặt trời thức dậy đằng đông, tỏa ánh sáng ấm áp xuống nhân gian.
+Đàn cò trắng bay về tổ khi hoàng hôn buông xuống cánh đồng.
 """
+
+# Bảo đảm tokenizer phủ đủ chữ cái, số và dấu câu thường gặp
+CHAR_COVERAGE = (
+    "aàáảãạăằắẳẵặâầấẩẫậ"
+    "eèéẻẽẹêềếểễệ"
+    "iìíỉĩị"
+    "oòóỏõọôồốổỗộơờớởỡợ"
+    "uùúủũụưừứửữự"
+    "yỳýỷỹỵ"
+    "đ"
+    "AÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬ"
+    "EÈÉẺẼẸÊỀẾỂỄỆ"
+    "IÌÍỈĨỊ"
+    "OÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢ"
+    "UÙÚỦŨỤƯỪỨỬỮỰ"
+    "YỲÝỶỸỴ"
+    "Đ"
+    "bcdfghjklmnpqrstvwxz BCDFGHJKLMNPQRSTVWXZ"
+    "0123456789 .,?!:;-\"'()\n"
+)
 
 
 def main():
@@ -96,7 +143,8 @@ def main():
         print(f"Dùng corpus tiếng Việt có sẵn × {args.repeat} = {len(text):,} ký tự")
 
     # ─── Char-level tokenizer ───
-    chars = sorted(list(set(text)))
+    # Phủ thêm CHAR_COVERAGE để vocab chứa đủ ký tự cho cả dữ liệu SFT tiếng Việt
+    chars = sorted(list(set(text) | set(CHAR_COVERAGE)))
     vocab_size = len(chars)
     print(f"Vocabulary: {vocab_size} ký tự (gồm cả ký tự tiếng Việt có dấu)")
     print(f"  Mẫu: {''.join(chars[:80])}")
