@@ -67,6 +67,18 @@ python finetune_sft.py --block_size 256
 python cli.py run sft_ckpt
 ```
 
+Sau khi train xong, model hỏi-đáp tiếng Việt được ngay (dừng sạch nhờ EOS):
+```
+>>> Xin chào
+AI-Local: Xin chào bạn! Rất vui được gặp bạn. Tôi có thể giúp gì cho bạn hôm nay?
+>>> Thủ đô của Việt Nam là gì?
+AI-Local: Thủ đô của Việt Nam là Hà Nội, một thành phố nghìn năm văn hiến với bề dày lịch sử.
+>>> Món phở là gì?
+AI-Local: Phở là món ăn nổi tiếng của Hà Nội, với nước dùng ngọt thanh, bánh phở mềm và thịt bò thơm ngon.
+```
+> Model nhỏ (1.8M params) học từ corpus mẫu → trả lời tốt trong phạm vi đã học.
+> Corpus càng lớn, model càng khái quát hóa và trả lời được câu ngoài tập huấn luyện.
+
 Muốn chất lượng cao hơn → fine-tune model Việt có sẵn:
 ```bash
 python cli.py finetune --base vinai/PhoGPT-4B-Chat --data data/sft_vi.jsonl --out tro-ly-viet --lora
