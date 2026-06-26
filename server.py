@@ -383,13 +383,16 @@ async def _stream_generate(
     idx = torch.tensor([tokens], dtype=torch.long, device=device)
 
     created_at = datetime.now(tz=timezone.utc).isoformat()
-    stop_seqs = stop or []
+    stop_seqs = list(stop or []) + ["■"]   # ■ = EOS, model tự học khi nào dừng
     generated_text = ""
     eval_count = 0
 
     t_gen_start = time.time()
     for token_id in model.generate_iter(idx, max_tokens, temperature=temperature, top_k=top_k):
         char = _decode([token_id], meta, model)
+        # Không phát ký tự EOS ra client
+        if "■" in char:
+            break
         generated_text += char
         eval_count += 1
         chunk = {
@@ -488,13 +491,16 @@ async def _stream_chat(
     idx = torch.tensor([tokens], dtype=torch.long, device=device)
 
     created_at = datetime.now(tz=timezone.utc).isoformat()
-    stop_seqs = stop or []
+    stop_seqs = list(stop or []) + ["■"]   # ■ = EOS, model tự học khi nào dừng
     generated_text = ""
     eval_count = 0
 
     t_gen_start = time.time()
     for token_id in model.generate_iter(idx, max_tokens, temperature=temperature, top_k=top_k):
         char = _decode([token_id], meta, model)
+        # Không phát ký tự EOS ra client
+        if "■" in char:
+            break
         generated_text += char
         eval_count += 1
         chunk = {

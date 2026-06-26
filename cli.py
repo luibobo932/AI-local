@@ -302,6 +302,9 @@ def _run_chat_loop(model, encode, decode, args):
                 idx, args.max_tokens, temperature=temperature, top_k=top_k
             ):
                 char = decode([token_id])
+                # EOS — model báo hiệu kết thúc câu trả lời
+                if "■" in char:
+                    break
                 response_chars.append(char)
                 print(char, end="", flush=True)
 

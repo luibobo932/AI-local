@@ -122,6 +122,7 @@ CHAR_COVERAGE = (
     "Đ"
     "bcdfghjklmnpqrstvwxz BCDFGHJKLMNPQRSTVWXZ"
     "0123456789 .,?!:;-\"'()\n"
+    "■"  # EOS — token báo hiệu kết thúc câu trả lời (model học cách dừng)
 )
 
 

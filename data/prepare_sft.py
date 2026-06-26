@@ -161,6 +161,10 @@ def tokenize_example(
     prefix = PROMPT_PREFIX.format(instruction=instruction)
     full = PROMPT_FULL.format(instruction=instruction, response=response)
 
+    # Thêm EOS "■" để model học cách DỪNG sau câu trả lời (nếu vocab có ký tự này)
+    if "■" in stoi:
+        full = full + "■"
+
     prefix_ids = encode(prefix, stoi)
     full_ids = encode(full, stoi)
 
