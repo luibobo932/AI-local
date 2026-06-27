@@ -28,6 +28,22 @@ cd AI-local
 pip install -r requirements.txt
 ```
 
+### 📱 Chat trên điện thoại (Google Colab — có link công khai)
+Không cần máy tính. Mở [Google Colab](https://colab.research.google.com), tạo notebook mới, dán và chạy:
+```python
+!git clone -b claude/local-language-model-3g7ije https://github.com/luibobo932/AI-local
+%cd AI-local
+!pip install -q torch numpy gradio
+!python app.py
+```
+Sau ~1 phút sẽ hiện link `https://xxxxx.gradio.live` → bấm vào là chat ngay trên điện thoại.
+(Hoặc mở sẵn file `AI_Local_Chat.ipynb` trong repo bằng Colab.)
+
+### 🖥️ Giao diện web (chạy local)
+```bash
+python cli.py serve          # rồi mở http://localhost:11434 trên trình duyệt
+```
+
 ### Cách 1 — Dùng model có sẵn (nhanh nhất, chat được ngay)
 ```bash
 python cli.py pull gpt2      # tải GPT-2 của OpenAI (~500MB)

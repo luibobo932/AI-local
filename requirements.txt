@@ -11,3 +11,5 @@ transformers>=4.40.0
 huggingface_hub>=0.22.0
 # Optional — chỉ cần khi dùng LoRA fine-tune (python cli.py finetune --lora)
 peft>=0.10.0
+# Optional — giao diện chat Gradio (python app.py) cho Colab / link công khai
+gradio>=5.0.0
