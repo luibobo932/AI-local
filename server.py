@@ -37,7 +37,7 @@ from typing import AsyncIterator
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from model.gpt import GPT, GPTConfig
@@ -819,8 +819,19 @@ async def oai_completions(req: OAICompletionRequest):
         raise HTTPException(404, str(e))
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
+    """Giao diện chat web. Mở http://localhost:11434 trên trình duyệt."""
+    ui_path = os.path.join(os.path.dirname(__file__), "web", "index.html")
+    if os.path.exists(ui_path):
+        with open(ui_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    return HTMLResponse("<h1>AI-Local</h1><p>Web UI not found (web/index.html).</p>")
+
+
+@app.get("/api/status")
+async def api_status():
+    """Ollama-compatible probe (giữ chuỗi nhận diện cho client cũ)."""
     return "Ollama is running"
 
 
@@ -845,7 +856,9 @@ if __name__ == "__main__":
     _data_dir = args.data_dir
     _checkpoints_dir = args.checkpoints_dir
 
+    ui_host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host
     print(f"AI-local server starting on http://{args.host}:{args.port}")
+    print(f"\n  💬 Mở giao diện chat tại:  http://{ui_host}:{args.port}\n")
     print(f"Checkpoints dir: {args.checkpoints_dir}")
     models = _discover_models()
     if models:

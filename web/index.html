@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI-Local 🧠 — Chat</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --panel: #1a1d27; --panel2: #232733;
+    --accent: #4f8cff; --accent2: #3a6fd8;
+    --text: #e6e8ee; --muted: #8b90a0; --user: #2b3550; --border: #2a2e3a;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh;
+    display: flex; flex-direction: column;
+  }
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    padding: 12px 20px; display: flex; align-items: center; gap: 14px;
+  }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .dot { width: 9px; height: 9px; border-radius: 50%; background: #36d399; }
+  header select {
+    margin-left: auto; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
+    font-size: 14px; cursor: pointer;
+  }
+  header button {
+    background: var(--panel2); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 13px;
+  }
+  header button:hover { color: var(--text); }
+  #chat {
+    flex: 1; overflow-y: auto; padding: 24px 0;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .row { display: flex; padding: 0 20px; }
+  .row.user { justify-content: flex-end; }
+  .bubble {
+    max-width: 720px; padding: 13px 17px; border-radius: 14px;
+    line-height: 1.55; font-size: 15px; white-space: pre-wrap; word-wrap: break-word;
+  }
+  .user .bubble { background: var(--user); border-bottom-right-radius: 4px; }
+  .bot .bubble { background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .bot .bubble.typing::after { content: "▋"; animation: blink 1s steps(2) infinite; color: var(--accent); }
+  @keyframes blink { 0%,50%{opacity:1} 51%,100%{opacity:0} }
+  .welcome { text-align: center; color: var(--muted); margin: auto; max-width: 520px; padding: 20px; }
+  .welcome h2 { color: var(--text); margin-bottom: 10px; font-size: 22px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+  .chip {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 18px;
+    padding: 8px 15px; font-size: 13px; cursor: pointer; color: var(--text);
+  }
+  .chip:hover { border-color: var(--accent); }
+  footer { padding: 16px 20px 22px; border-top: 1px solid var(--border); background: var(--panel); }
+  .inputbar { max-width: 760px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+  textarea {
+    flex: 1; background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 12px; padding: 13px 15px; font-size: 15px; resize: none;
+    font-family: inherit; max-height: 160px; line-height: 1.4;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  #send {
+    background: var(--accent); color: white; border: none; border-radius: 12px;
+    width: 46px; height: 46px; cursor: pointer; font-size: 19px; flex-shrink: 0;
+  }
+  #send:hover { background: var(--accent2); }
+  #send:disabled { opacity: 0.4; cursor: not-allowed; }
+  .hint { text-align: center; color: var(--muted); font-size: 12px; margin-top: 9px; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot"></span>
+    <h1>AI-Local 🧠</h1>
+    <select id="model"></select>
+    <button id="clear">🗑 Xóa</button>
+  </header>
+
+  <div id="chat">
+    <div class="welcome" id="welcome">
+      <h2>Chào bạn 👋</h2>
+      <p>Đây là mô hình ngôn ngữ chạy hoàn toàn trên máy của bạn. Hãy thử hỏi:</p>
+      <div class="chips" id="chips"></div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="inputbar">
+      <textarea id="input" rows="1" placeholder="Nhập tin nhắn... (Enter để gửi, Shift+Enter xuống dòng)"></textarea>
+      <button id="send">➤</button>
+    </div>
+    <div class="hint">Model nhỏ chạy local — trả lời tốt nhất trong phạm vi đã học.</div>
+  </footer>
+
+<script>
+const chat = document.getElementById('chat');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+const modelSel = document.getElementById('model');
+const welcome = document.getElementById('welcome');
+let history = [];
+let busy = false;
+
+const samples = ["Xin chào", "Bạn tên là gì?", "Thủ đô của Việt Nam là gì?", "Món phở là gì?", "Làm sao để học tốt?"];
+const chips = document.getElementById('chips');
+samples.forEach(s => {
+  const c = document.createElement('div');
+  c.className = 'chip'; c.textContent = s;
+  c.onclick = () => { input.value = s; send(); };
+  chips.appendChild(c);
+});
+
+// Load models
+fetch('/api/tags').then(r => r.json()).then(d => {
+  (d.models || []).forEach(m => {
+    const o = document.createElement('option');
+    o.value = m.name; o.textContent = m.name;
+    modelSel.appendChild(o);
+  });
+  // Ưu tiên chọn model tiếng Việt nếu có
+  const vi = [...modelSel.options].find(o => /vi|chat/.test(o.value));
+  if (vi) modelSel.value = vi.value;
+}).catch(() => {});
+
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+});
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+sendBtn.onclick = send;
+document.getElementById('clear').onclick = () => {
+  history = []; chat.querySelectorAll('.row').forEach(r => r.remove());
+  welcome.style.display = '';
+};
+
+function addBubble(role, text) {
+  if (welcome) welcome.style.display = 'none';
+  const row = document.createElement('div');
+  row.className = 'row ' + role;
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;
+  row.appendChild(b);
+  chat.appendChild(row);
+  chat.scrollTop = chat.scrollHeight;
+  return b;
+}
+
+async function send() {
+  const text = input.value.trim();
+  if (!text || busy) return;
+  busy = true; sendBtn.disabled = true;
+  addBubble('user', text);
+  input.value = ''; input.style.height = 'auto';
+  history.push({ role: 'user', content: text });
+
+  const bot = addBubble('bot', '');
+  bot.classList.add('typing');
+  let answer = '';
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelSel.value, messages: history, stream: true })
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const j = JSON.parse(line);
+          const piece = j.message?.content || '';
+          if (piece) {
+            answer += piece;
+            bot.textContent = answer;
+            chat.scrollTop = chat.scrollHeight;
+          }
+        } catch (e) {}
+      }
+    }
+  } catch (e) {
+    answer = '⚠️ Lỗi kết nối tới server. Bạn đã chạy `python cli.py serve` chưa?';
+    bot.textContent = answer;
+  }
+
+  bot.classList.remove('typing');
+  if (answer.trim()) history.push({ role: 'assistant', content: answer });
+  busy = false; sendBtn.disabled = false; input.focus();
+}
+</script>
+</body>
+</html>
