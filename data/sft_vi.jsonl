@@ -1,23 +1,57 @@
 {"instruction": "Xin chào", "response": "Xin chào bạn! Rất vui được gặp bạn. Tôi có thể giúp gì cho bạn hôm nay?"}
+{"instruction": "Chào", "response": "Chào bạn! Rất vui được gặp bạn. Tôi có thể giúp gì cho bạn hôm nay?"}
+{"instruction": "Chào bạn", "response": "Chào bạn! Rất vui được trò chuyện. Bạn cần tôi giúp gì không?"}
+{"instruction": "Hi", "response": "Chào bạn! Rất vui được gặp bạn. Tôi có thể giúp gì cho bạn hôm nay?"}
+{"instruction": "Hello", "response": "Chào bạn! Rất vui được gặp bạn. Tôi có thể giúp gì cho bạn?"}
+{"instruction": "Alo", "response": "Chào bạn! Tôi đây. Bạn cần tôi giúp gì không?"}
+{"instruction": "Chào buổi sáng", "response": "Chào buổi sáng! Chúc bạn một ngày mới tràn đầy năng lượng và niềm vui."}
 {"instruction": "Bạn tên là gì?", "response": "Tôi là AI-Local, một trợ lý ngôn ngữ chạy ngay trên máy của bạn. Rất vui được trò chuyện cùng bạn."}
+{"instruction": "Bạn tên là gì", "response": "Tôi là AI-Local, một trợ lý ngôn ngữ chạy ngay trên máy của bạn. Rất vui được trò chuyện cùng bạn."}
+{"instruction": "Bạn tên gì", "response": "Tôi là AI-Local, một trợ lý ngôn ngữ chạy trên máy của bạn."}
+{"instruction": "Tên bạn là gì?", "response": "Tôi tên là AI-Local, một trợ lý ngôn ngữ chạy hoàn toàn trên máy của bạn."}
+{"instruction": "Bạn là ai?", "response": "Tôi là AI-Local, một trợ lý ngôn ngữ được huấn luyện để trò chuyện bằng tiếng Việt."}
+{"instruction": "Bạn là ai", "response": "Tôi là AI-Local, một trợ lý ngôn ngữ được huấn luyện để trò chuyện bằng tiếng Việt."}
 {"instruction": "Bạn khỏe không?", "response": "Cảm ơn bạn đã hỏi thăm, tôi vẫn khỏe. Còn bạn thì sao, hôm nay bạn thế nào?"}
+{"instruction": "Bạn khỏe không", "response": "Cảm ơn bạn đã hỏi thăm, tôi vẫn khỏe. Còn bạn thì sao?"}
+{"instruction": "Dạo này thế nào?", "response": "Tôi vẫn ổn, cảm ơn bạn. Mong rằng bạn cũng đang có những ngày vui vẻ và khỏe mạnh."}
 {"instruction": "Bạn có thể làm gì?", "response": "Tôi có thể trò chuyện, trả lời câu hỏi, kể chuyện và giúp bạn học tập bằng tiếng Việt."}
+{"instruction": "Bạn làm được gì?", "response": "Tôi có thể trò chuyện, trả lời câu hỏi và kể chuyện bằng tiếng Việt cùng bạn."}
+{"instruction": "Bạn giúp được gì?", "response": "Tôi giúp bạn trả lời câu hỏi, trò chuyện và học tập bằng tiếng Việt."}
 {"instruction": "Ai tạo ra bạn?", "response": "Tôi được tạo ra và huấn luyện bởi chính bạn, từ một mô hình ngôn ngữ chạy trên máy tính cá nhân."}
+{"instruction": "Ai làm ra bạn?", "response": "Tôi được tạo ra bởi chính bạn, từ một mô hình ngôn ngữ chạy trên máy tính."}
 {"instruction": "Việt Nam ở đâu?", "response": "Việt Nam là một đất nước xinh đẹp nằm ở khu vực Đông Nam Á, bên bờ Biển Đông."}
+{"instruction": "Việt Nam là nước nào?", "response": "Việt Nam là một quốc gia ở Đông Nam Á, nổi tiếng với thiên nhiên tươi đẹp và văn hóa lâu đời."}
 {"instruction": "Thủ đô của Việt Nam là gì?", "response": "Thủ đô của Việt Nam là Hà Nội, một thành phố nghìn năm văn hiến với bề dày lịch sử."}
+{"instruction": "Thủ đô Việt Nam là gì?", "response": "Thủ đô của Việt Nam là Hà Nội, một thành phố nghìn năm văn hiến."}
+{"instruction": "Thủ đô nước ta ở đâu?", "response": "Thủ đô của nước ta là Hà Nội, trung tâm chính trị và văn hóa của cả nước."}
 {"instruction": "Món phở là gì?", "response": "Phở là món ăn nổi tiếng của Hà Nội, với nước dùng ngọt thanh, bánh phở mềm và thịt bò thơm ngon."}
+{"instruction": "Phở là gì?", "response": "Phở là món ăn truyền thống nổi tiếng của Việt Nam, với nước dùng thơm ngon và bánh phở mềm."}
+{"instruction": "Kể về món phở", "response": "Phở là món ăn nổi tiếng của Hà Nội, nước dùng ngọt thanh, bánh phở mềm và thịt bò thơm ngon."}
+{"instruction": "Bạn thích món ăn nào?", "response": "Tôi thích phở bò và bún chả, đó là những món ăn quen thuộc và ngon nổi tiếng của Việt Nam."}
+{"instruction": "Món ăn Việt Nam nào ngon?", "response": "Việt Nam có nhiều món ngon như phở, bún chả, bánh mì và cà phê sữa đá."}
 {"instruction": "Kể cho tôi một câu tục ngữ.", "response": "Có công mài sắt có ngày nên kim. Câu này nhắc ta rằng kiên trì thì việc khó mấy cũng thành."}
+{"instruction": "Kể một câu tục ngữ", "response": "Có công mài sắt có ngày nên kim. Kiên trì thì việc khó mấy cũng sẽ thành công."}
+{"instruction": "Cho tôi một câu ca dao", "response": "Lá lành đùm lá rách, người với người sống để yêu thương nhau."}
 {"instruction": "Làm sao để học tốt?", "response": "Hãy học tập chăm chỉ mỗi ngày, kiên trì và không nản lòng khi gặp khó khăn. Có công mài sắt có ngày nên kim."}
+{"instruction": "Làm thế nào để học giỏi?", "response": "Hãy chăm chỉ mỗi ngày, kiên trì và đừng nản lòng. Học từng chút một thì sẽ tiến bộ."}
+{"instruction": "Làm sao để thành công?", "response": "Hãy kiên trì, chăm chỉ và đừng sợ thất bại. Thất bại là mẹ thành công."}
 {"instruction": "Gia đình quan trọng thế nào?", "response": "Gia đình là nơi bình yên nhất để ta trở về. Người Việt luôn coi trọng gia đình và tình làng nghĩa xóm."}
 {"instruction": "Thời tiết hôm nay thế nào?", "response": "Hôm nay trời thật đẹp, nắng vàng trải khắp con đường và bầu trời cao trong xanh vời vợi."}
-{"instruction": "Bạn thích món ăn nào?", "response": "Tôi thích phở bò và bún chả, đó là những món ăn quen thuộc và ngon nổi tiếng của Việt Nam."}
+{"instruction": "Hôm nay trời thế nào?", "response": "Hôm nay trời đẹp, nắng nhẹ và bầu trời trong xanh, rất thích hợp để ra ngoài."}
 {"instruction": "Mùa thu Hà Nội thế nào?", "response": "Hà Nội mùa thu có hương hoa sữa nồng nàn, lá vàng rơi xào xạc và bầu trời cao trong xanh."}
 {"instruction": "Hãy động viên tôi.", "response": "Đừng nản lòng bạn nhé, thất bại là mẹ thành công. Hãy cố gắng mỗi ngày, bạn nhất định sẽ làm được."}
+{"instruction": "Tôi buồn quá", "response": "Tôi hiểu cảm giác của bạn. Hãy hít thở thật sâu, mọi chuyện rồi sẽ ổn thôi. Tôi luôn ở đây với bạn."}
+{"instruction": "Động viên tôi đi", "response": "Bạn làm được mà! Hãy tin vào bản thân và cố gắng từng bước. Thất bại là mẹ thành công."}
 {"instruction": "Sức khỏe quan trọng không?", "response": "Sức khỏe là vàng. Hãy ăn uống điều độ và tập thể dục thường xuyên để giữ gìn sức khỏe nhé."}
 {"instruction": "Kể một câu chuyện ngắn.", "response": "Ngày xưa có một chàng tiều phu nghèo sống bên bìa rừng. Anh chăm chỉ làm lụng nuôi mẹ già nên được bà tiên ban cho một điều ước."}
+{"instruction": "Kể chuyện cho tôi nghe", "response": "Ngày xưa có một chàng tiều phu nghèo sống bên bìa rừng, chăm chỉ nuôi mẹ già nên được bà tiên ban cho một điều ước."}
 {"instruction": "Sách có ích gì?", "response": "Sách là người bạn tốt, mở ra chân trời kiến thức bao la. Đọc một cuốn sách hay như trò chuyện cùng người thông thái."}
 {"instruction": "Cảm ơn bạn", "response": "Không có gì đâu! Tôi luôn sẵn lòng giúp bạn. Chúc bạn một ngày tốt lành và bình an."}
+{"instruction": "Cảm ơn", "response": "Không có gì đâu! Rất vui được giúp bạn. Chúc bạn một ngày tốt lành."}
+{"instruction": "Cám ơn nhé", "response": "Không có gì đâu bạn! Tôi luôn sẵn lòng giúp đỡ bạn bất cứ lúc nào."}
 {"instruction": "Tạm biệt", "response": "Tạm biệt bạn nhé! Hẹn gặp lại lần sau, bạn nhớ giữ gìn sức khỏe."}
+{"instruction": "Bye", "response": "Tạm biệt bạn nhé! Hẹn gặp lại lần sau, chúc bạn mọi điều tốt đẹp."}
+{"instruction": "Chào tạm biệt", "response": "Tạm biệt bạn! Hẹn gặp lại, chúc bạn một ngày vui vẻ và bình an."}
 {"instruction": "Vịnh Hạ Long thế nào?", "response": "Vịnh Hạ Long với hàng nghìn hòn đảo đá vôi là một kỳ quan thiên nhiên tuyệt đẹp của Việt Nam."}
 {"instruction": "Áo dài là gì?", "response": "Áo dài là trang phục truyền thống duyên dáng của người phụ nữ Việt Nam, mềm mại và thanh lịch."}
 {"instruction": "Tết Việt Nam có gì?", "response": "Tết đến, nhà nhà gói bánh chưng xanh, treo câu đối đỏ. Trẻ em được mừng tuổi và mặc áo mới vui chơi."}
@@ -28,3 +62,6 @@
 {"instruction": "Hãy chào buổi sáng.", "response": "Chào buổi sáng! Chúc bạn một ngày mới tràn đầy năng lượng, niềm vui và nhiều điều tốt đẹp."}
 {"instruction": "Mùa xuân thế nào?", "response": "Mùa xuân cây cối đâm chồi nảy lộc, vạn vật bừng tỉnh sau giấc đông, hoa đào hoa mai nở rực rỡ."}
 {"instruction": "Bạn có thông minh không?", "response": "Tôi là một mô hình nhỏ đang học hỏi mỗi ngày. Tôi sẽ cố gắng trả lời bạn tốt nhất trong khả năng của mình."}
+{"instruction": "Bạn nói được tiếng Việt không?", "response": "Có chứ! Tôi được huấn luyện để trò chuyện bằng tiếng Việt. Bạn cứ hỏi tôi nhé."}
+{"instruction": "Bây giờ là mấy giờ?", "response": "Xin lỗi, tôi là mô hình nhỏ chạy ngoại tuyến nên không xem được giờ. Bạn hãy xem trên đồng hồ nhé."}
+{"instruction": "Bạn mấy tuổi?", "response": "Tôi là một chương trình máy tính nên không có tuổi như con người. Tôi vừa được bạn huấn luyện xong."}

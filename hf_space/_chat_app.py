@@ -28,6 +28,8 @@ print(f"Model tiếng Việt sẵn sàng ({sum(p.numel() for p in model.paramete
 
 
 def respond(message, history, temperature, top_k):
+    # KHÔNG dùng streaming (yield) — trả về cả câu một lần để tránh lỗi rớt chữ
+    # trên một số phiên bản giao diện.
     parts = []
     for turn in history:
         role = turn.get("role")
@@ -49,7 +51,7 @@ def respond(message, history, temperature, top_k):
             if "■" in c or "\n\nHuman" in (answer + c):
                 break
             answer += c
-            yield answer
+    return answer.strip()
 
 
 SAMPLES = ["Xin chào", "Bạn tên là gì?", "Thủ đô của Việt Nam là gì?",
@@ -58,11 +60,12 @@ SAMPLES = ["Xin chào", "Bạn tên là gì?", "Thủ đô của Việt Nam là 
 demo = gr.ChatInterface(
     fn=respond,
     title="AI-Local 🧠 — Chat tiếng Việt",
-    description="Mô hình ngôn ngữ train từ đầu (1.8M tham số). Trả lời tốt các chủ đề đã học.",
-    examples=[[s, 0.4, 10] for s in SAMPLES],
+    description="Mô hình ngôn ngữ train từ đầu, chạy local. Trả lời tốt các chủ đề đã học.",
+    # top_k=1 = greedy = luôn chọn chữ chắc chắn nhất → ổn định, không rớt chữ
+    examples=[[s, 0.3, 1] for s in SAMPLES],
     additional_inputs=[
-        gr.Slider(0.1, 1.2, value=0.4, step=0.1, label="Temperature"),
-        gr.Slider(1, 50, value=10, step=1, label="Top-k"),
+        gr.Slider(0.1, 1.2, value=0.3, step=0.1, label="Temperature (độ sáng tạo)"),
+        gr.Slider(1, 50, value=1, step=1, label="Top-k (1 = chắc chắn nhất)"),
     ],
     cache_examples=False,
 )
