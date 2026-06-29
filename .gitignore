@@ -11,3 +11,5 @@ logs/
 output/
 .desktop-profile/
 .playwright-cli/
+# Runtime state của agent: sessions + auto-memory (per-machine)
+.ai-local/

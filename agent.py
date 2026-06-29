@@ -414,6 +414,29 @@ def _parse_action(action_text: str) -> tuple[str, dict]:
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
+def _build_context_prefix(project_root: str, skill: str = "") -> str:
+    """Gom project memory + skill prompt để inject vào system prompt."""
+    parts = []
+    try:
+        from memory import load_project_context
+        ctx = load_project_context(project_root)
+        if ctx.strip():
+            parts.append(ctx)
+    except Exception:
+        pass
+
+    if skill:
+        try:
+            from skills import get_skill_prompt
+            sp = get_skill_prompt(skill, project_root)
+            if sp.strip():
+                parts.append(f"# Skill: {skill}\n{sp}")
+        except Exception:
+            pass
+
+    return "\n\n".join(parts)
+
+
 def run_agent(
     task: str,
     model: str = "chat_vi",
@@ -425,6 +448,9 @@ def run_agent(
     max_tokens: int = 1024,
     mode: str = "auto",
     timeout: float = 60.0,
+    project_root: str = ".",
+    skill: str = "",
+    use_memory: bool = True,
 ) -> AgentResult:
     """
     Chạy agent để hoàn thành nhiệm vụ.
@@ -440,10 +466,30 @@ def run_agent(
         max_tokens: Số token tối đa mỗi bước
         mode: "auto" | "react" | "function_calling"
         timeout: Timeout HTTP mỗi request
+        project_root: Thư mục dự án (để load memory + skills)
+        skill: Tên skill áp dụng (rỗng = không dùng)
+        use_memory: Tự động load project memory vào system prompt
 
     Returns:
         AgentResult với answer, steps, và metadata
     """
+    # Nếu skill chỉ định tools, dùng tools đó
+    if skill and not tools:
+        try:
+            from skills import load_skill
+            sk = load_skill(skill, project_root)
+            if sk and sk.get("tools"):
+                tools = sk["tools"]
+        except Exception:
+            pass
+
+    # Inject project memory + skill vào system prompt
+    if use_memory or skill:
+        prefix = _build_context_prefix(project_root if use_memory else "/nonexistent", skill)
+        if prefix:
+            base = system_prompt or "Bạn là AI assistant đa năng. Hãy hoàn thành nhiệm vụ của người dùng."
+            system_prompt = f"{base}\n\n{prefix}"
+
     cfg = AgentConfig(
         model=model,
         server_url=server_url,

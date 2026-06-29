@@ -2183,6 +2183,9 @@ class AgentRequest(BaseModel):
     temperature: float = 0.2
     max_tokens: int = 1024
     mode: str = "auto"  # "auto" | "react" | "function_calling"
+    skill: str = ""                     # skill áp dụng (rỗng = không)
+    use_memory: bool = True             # auto load project memory
+    session_id: str = ""                # lưu vào phiên này (rỗng = không lưu)
 
 
 class AgentStreamRequest(AgentRequest):
@@ -2196,15 +2199,16 @@ async def v1_agent(req: AgentRequest):
 
     Agent sẽ:
     1. Nhận nhiệm vụ (task)
-    2. Tự động chọn và gọi tools
-    3. Lặp cho đến khi hoàn thành (tối đa max_steps bước)
-    4. Trả về kết quả + trace
+    2. Tự động load project memory + skill (nếu có)
+    3. Tự động chọn và gọi tools
+    4. Lặp cho đến khi hoàn thành (tối đa max_steps bước)
+    5. Trả về kết quả + trace, lưu phiên nếu có session_id
 
     Ví dụ:
         POST /v1/agent
         {"task": "Tìm hiểu Python asyncio và tóm tắt"}
     """
-    from agent import run_agent, format_result
+    from agent import run_agent
 
     model_name = req.model or _default_model
     if not model_name:
@@ -2223,10 +2227,12 @@ async def v1_agent(req: AgentRequest):
             temperature=req.temperature,
             max_tokens=req.max_tokens,
             mode=req.mode,
+            skill=req.skill,
+            use_memory=req.use_memory,
         )
     )
 
-    return {
+    response = {
         "answer": result.answer,
         "model": result.model,
         "elapsed": result.elapsed,
@@ -2250,6 +2256,105 @@ async def v1_agent(req: AgentRequest):
             for s in result.steps
         ],
     }
+
+    # Lưu vào phiên nếu có session_id
+    if req.session_id:
+        try:
+            from sessions import SessionStore
+            store = SessionStore()
+            store.append_message(req.session_id, "user", req.task)
+            store.save_agent_run(req.session_id, response)
+        except Exception:
+            pass
+
+    return response
+
+
+# ─── Skills, Memory & Sessions endpoints ──────────────────────────────────────
+
+@app.get("/v1/skills")
+async def v1_list_skills():
+    """Liệt kê các skill có sẵn."""
+    from skills import list_skills
+    return {"skills": list_skills()}
+
+
+@app.get("/v1/skills/{name}")
+async def v1_get_skill(name: str):
+    """Đọc chi tiết một skill."""
+    from skills import load_skill
+    skill = load_skill(name)
+    if skill is None:
+        raise HTTPException(404, f"Skill '{name}' không tồn tại")
+    return skill
+
+
+@app.get("/v1/memory")
+async def v1_get_memory():
+    """Đọc project memory + auto-memory."""
+    from memory import load_project_context, get_memory
+    return {
+        "context": load_project_context("."),
+        "auto_memory": get_memory("."),
+    }
+
+
+class RememberRequest(BaseModel):
+    fact: str
+    category: str = "general"
+
+
+@app.post("/v1/memory")
+async def v1_remember(req: RememberRequest):
+    """Ghi một điều vào auto-memory."""
+    from memory import remember
+    result = remember(req.fact, req.category)
+    return {"result": result}
+
+
+@app.get("/v1/sessions")
+async def v1_list_sessions():
+    """Liệt kê các phiên đã lưu."""
+    from sessions import SessionStore
+    return {"sessions": SessionStore().list_sessions()}
+
+
+@app.get("/v1/sessions/{session_id}")
+async def v1_get_session(session_id: str):
+    """Đọc một phiên."""
+    from sessions import SessionStore
+    data = SessionStore().load(session_id)
+    if data is None:
+        raise HTTPException(404, "Phiên không tồn tại")
+    return data
+
+
+class CreateSessionRequest(BaseModel):
+    title: str = ""
+    model: str = ""
+
+
+@app.post("/v1/sessions")
+async def v1_create_session(req: CreateSessionRequest):
+    """Tạo phiên mới."""
+    from sessions import SessionStore
+    sid = SessionStore().create(req.title, req.model)
+    return {"session_id": sid}
+
+
+@app.delete("/v1/sessions/{session_id}")
+async def v1_delete_session(session_id: str):
+    """Xóa một phiên."""
+    from sessions import SessionStore
+    ok = SessionStore().delete(session_id)
+    return {"deleted": ok, "session_id": session_id}
+
+
+@app.get("/v1/repomap")
+async def v1_repomap(max_files: int = 40):
+    """Trả về bản đồ codebase."""
+    from repo_map import build_repo_map
+    return {"repo_map": build_repo_map(".", max_files=max_files)}
 
 
 @app.get("/v1/tools")

@@ -17,6 +17,29 @@ from tools.shell_tools import run_command
 from tools.web_tools import web_fetch, web_search
 from tools.git_tools import git_status, git_diff, git_log, git_commit
 
+
+# ─── Lazy wrappers cho tools ở module gốc (tránh import vòng) ──────────────────
+
+def _repo_map(root: str = ".", max_files: int = 40) -> str:
+    from repo_map import repo_map_tool
+    return repo_map_tool(root, max_files)
+
+
+def _remember(fact: str, category: str = "general") -> str:
+    from memory import remember_tool
+    return remember_tool(fact, category)
+
+
+def _recall() -> str:
+    from memory import recall_tool
+    return recall_tool()
+
+
+def _list_skills() -> str:
+    from skills import list_skills_tool
+    return list_skills_tool()
+
+
 # Registry: name → callable
 TOOL_REGISTRY: dict[str, callable] = {
     "read_file":    read_file,
@@ -31,6 +54,10 @@ TOOL_REGISTRY: dict[str, callable] = {
     "git_diff":     git_diff,
     "git_log":      git_log,
     "git_commit":   git_commit,
+    "repo_map":     _repo_map,
+    "remember":     _remember,
+    "recall":       _recall,
+    "list_skills":  _list_skills,
 }
 
 # OpenAI function-calling schemas
@@ -226,6 +253,52 @@ TOOL_SCHEMAS: list[dict] = [
                 },
                 "required": ["message"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "repo_map",
+            "description": "Tạo bản đồ codebase: danh sách file kèm class/function chính. Dùng để hiểu nhanh cấu trúc dự án trước khi đọc chi tiết.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "root": {"type": "string", "description": "Thư mục gốc dự án (mặc định: hiện tại)"},
+                    "max_files": {"type": "integer", "description": "Số file tối đa (mặc định 40)"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember",
+            "description": "Ghi nhớ một điều quan trọng vào bộ nhớ dài hạn (MEMORY.md) để dùng cho các phiên sau. Dùng khi học được sở thích người dùng, quy ước dự án, hoặc thông tin cần nhớ.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fact": {"type": "string", "description": "Nội dung cần nhớ"},
+                    "category": {"type": "string", "description": "Phân loại: general/preference/fact/command (mặc định general)"},
+                },
+                "required": ["fact"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall",
+            "description": "Đọc lại tất cả ghi nhớ đã lưu trong bộ nhớ dài hạn.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_skills",
+            "description": "Liệt kê các skill (workflow đóng gói) có sẵn để áp dụng cho nhiệm vụ.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
 ]
