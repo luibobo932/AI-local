@@ -16,6 +16,9 @@ from tools.file_tools import (
 from tools.shell_tools import run_command
 from tools.web_tools import web_fetch, web_search
 from tools.git_tools import git_status, git_diff, git_log, git_commit
+from tools.code_tools import (
+    glob_files, multi_edit, apply_patch, todo_write, todo_read
+)
 
 
 # ─── Lazy wrappers cho tools ở module gốc (tránh import vòng) ──────────────────
@@ -58,6 +61,11 @@ TOOL_REGISTRY: dict[str, callable] = {
     "remember":     _remember,
     "recall":       _recall,
     "list_skills":  _list_skills,
+    "glob":         glob_files,
+    "multi_edit":   multi_edit,
+    "apply_patch":  apply_patch,
+    "todo_write":   todo_write,
+    "todo_read":    todo_read,
 }
 
 # OpenAI function-calling schemas
@@ -298,6 +306,95 @@ TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "list_skills",
             "description": "Liệt kê các skill (workflow đóng gói) có sẵn để áp dụng cho nhiệm vụ.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "glob",
+            "description": "Tìm file theo glob pattern (hỗ trợ **). Trả về danh sách sắp theo thời gian sửa mới nhất. Ví dụ: '**/*.py', 'tools/*.py'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern, vd **/*.py"},
+                    "root": {"type": "string", "description": "Thư mục gốc (mặc định: hiện tại)"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "multi_edit",
+            "description": "Áp nhiều find/replace tuần tự trong cùng một file (atomic). Mỗi old_text phải duy nhất trong file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Đường dẫn file"},
+                    "edits": {
+                        "type": "array",
+                        "description": "List các chỉnh sửa",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_text": {"type": "string"},
+                                "new_text": {"type": "string"},
+                            },
+                            "required": ["old_text", "new_text"],
+                        },
+                    },
+                },
+                "required": ["path", "edits"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "apply_patch",
+            "description": "Áp patch dạng search/replace block (<<<<<<< SEARCH / ======= / >>>>>>> REPLACE). Hỗ trợ nhiều block.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Đường dẫn file"},
+                    "patch": {"type": "string", "description": "Nội dung patch dạng SEARCH/REPLACE"},
+                },
+                "required": ["path", "patch"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_write",
+            "description": "Lập/cập nhật checklist công việc cho nhiệm vụ nhiều bước. Dùng để theo dõi tiến độ, đánh dấu in_progress/completed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todos": {
+                        "type": "array",
+                        "description": "Danh sách công việc",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string"},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                            },
+                            "required": ["content", "status"],
+                        },
+                    },
+                },
+                "required": ["todos"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_read",
+            "description": "Đọc checklist công việc hiện tại.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
