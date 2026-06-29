@@ -17,13 +17,15 @@ Sử dụng:
 """
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-import httpx
-
+from llm import LLMClient, LLMError
 from tools import TOOL_SCHEMAS, call_tool
+
+logger = logging.getLogger("minion.agent")
 
 # ─── System prompt coding agent (kiểu Claude Code) ───────────────────────────
 
@@ -52,6 +54,9 @@ Khi hoàn thành, tóm tắt ngắn gọn những gì đã làm và kết quả 
 class AgentConfig:
     model: str = "chat_vi"
     server_url: str = "http://localhost:11434"
+    base_url: str = "http://localhost:11434/v1"  # endpoint OpenAI-compatible
+    api_key: str = ""
+    provider: str = ""
     max_steps: int = 10
     temperature: float = 0.2
     max_tokens: int = 1024
@@ -155,36 +160,23 @@ def _build_tools_desc(tool_names: list[str]) -> str:
     return "\n".join(lines)
 
 
-# ─── Helper: gọi server ───────────────────────────────────────────────────────
+# ─── Helper: gọi LLM (Ollama / LM Studio / OpenAI / ai-local) ─────────────────
 
 def _chat_request(
-    server_url: str,
+    base_url: str,
     model: str,
     messages: list[dict],
     tools: list[dict] | None,
     temperature: float,
     max_tokens: int,
     timeout: float,
+    api_key: str = "",
 ) -> dict:
-    """Gọi /v1/chat/completions và trả về response dict."""
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": False,
-    }
-    if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-
-    resp = httpx.post(
-        f"{server_url}/v1/chat/completions",
-        json=payload,
-        timeout=timeout,
+    """Gọi {base_url}/chat/completions qua llm.LLMClient (stdlib)."""
+    client = LLMClient(base_url=base_url, model=model, api_key=api_key, timeout=timeout)
+    return client.chat(
+        messages, tools=tools, temperature=temperature, max_tokens=max_tokens
     )
-    resp.raise_for_status()
-    return resp.json()
 
 
 # ─── Streaming callback helper ────────────────────────────────────────────────
@@ -219,8 +211,8 @@ def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
 
         try:
             data = _chat_request(
-                cfg.server_url, cfg.model, messages,
-                tool_schemas, cfg.temperature, cfg.max_tokens, cfg.timeout
+                cfg.base_url, cfg.model, messages,
+                tool_schemas, cfg.temperature, cfg.max_tokens, cfg.timeout, cfg.api_key
             )
         except Exception as e:
             return AgentResult(
@@ -274,10 +266,10 @@ def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
     # Hết max_steps — lấy câu trả lời cuối cùng
     try:
         data = _chat_request(
-            cfg.server_url, cfg.model, messages + [
+            cfg.base_url, cfg.model, messages + [
                 {"role": "user", "content": "Tổng kết kết quả và đưa ra câu trả lời cuối cùng."}
             ],
-            None, cfg.temperature, cfg.max_tokens, cfg.timeout
+            None, cfg.temperature, cfg.max_tokens, cfg.timeout, cfg.api_key
         )
         answer = data["choices"][0]["message"].get("content", "")
     except Exception:
@@ -310,8 +302,8 @@ def _run_react(task: str, cfg: AgentConfig) -> AgentResult:
 
         try:
             data = _chat_request(
-                cfg.server_url, cfg.model, messages,
-                None, cfg.temperature, cfg.max_tokens, cfg.timeout
+                cfg.base_url, cfg.model, messages,
+                None, cfg.temperature, cfg.max_tokens, cfg.timeout, cfg.api_key
             )
         except Exception as e:
             return AgentResult(
@@ -478,15 +470,15 @@ def _build_context_prefix(project_root: str, skill: str = "") -> str:
 
 def run_agent(
     task: str,
-    model: str = "chat_vi",
-    server_url: str = "http://localhost:11434",
+    model: str = "",
+    server_url: str = "",
     tools: list[str] = None,
     system_prompt: str = "",
     max_steps: int = 10,
     temperature: float = 0.2,
     max_tokens: int = 1024,
     mode: str = "auto",
-    timeout: float = 60.0,
+    timeout: float = 120.0,
     project_root: str = ".",
     skill: str = "",
     use_memory: bool = True,
@@ -494,6 +486,9 @@ def run_agent(
     permission_mode: str = "auto",
     allow_tools=None,
     deny_tools=None,
+    provider: str = "",
+    base_url: str = "",
+    api_key: str = "",
 ) -> AgentResult:
     """
     Chạy agent để hoàn thành nhiệm vụ.
@@ -516,6 +511,19 @@ def run_agent(
     Returns:
         AgentResult với answer, steps, và metadata
     """
+    # Resolve provider/base_url/model/api_key (Ollama / LM Studio / OpenAI / ai-local)
+    from llm import LLMClient
+    # server_url cũ (ai-local) → base_url = server_url + /v1
+    if server_url and not base_url:
+        base_url = server_url.rstrip("/") + "/v1"
+    client = LLMClient.from_env(
+        provider=provider, model=model, base_url=base_url, api_key=api_key
+    )
+    base_url = client.base_url
+    api_key = client.api_key
+    if not model:
+        model = client.model
+
     # Nếu skill chỉ định tools, dùng tools đó
     if skill and not tools:
         try:
@@ -552,6 +560,9 @@ def run_agent(
     cfg = AgentConfig(
         model=model,
         server_url=server_url,
+        base_url=base_url,
+        api_key=api_key,
+        provider=client.provider,
         max_steps=max_steps,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -563,17 +574,18 @@ def run_agent(
         policy=policy,
     )
 
-    # Auto-detect mode: thử function_calling trước
+    # Auto-detect mode: model mạnh (Ollama/LM Studio/OpenAI) → function_calling
     if mode == "auto":
-        # Kiểm tra xem server có hỗ trợ tool_calls không
-        # bằng cách xem model có phải là HF model mạnh không
-        hf_capable = any(
+        # ai-local provider (model nhỏ built-in) → react; còn lại → function_calling
+        is_tiny_local = cfg.provider == "ai-local" or model in ("chat_vi", "minion", "phogpt")
+        capable = any(
             m in model.lower() for m in [
-                "llama", "mistral", "gpt-4", "gpt2-xl",
-                "phi", "gemma", "qwen", "yi", "deepseek",
+                "llama", "mistral", "gpt-4", "gpt-3.5", "gpt2-xl", "o1", "o3",
+                "phi", "gemma", "qwen", "yi", "deepseek", "coder", "codestral",
+                "mixtral", "command", "nemo", "granite",
             ]
         )
-        effective_mode = "function_calling" if hf_capable else "react"
+        effective_mode = "react" if is_tiny_local else ("function_calling" if capable else "react")
     else:
         effective_mode = mode
 
