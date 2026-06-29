@@ -33,8 +33,9 @@ import pickle
 import re
 import time
 import unicodedata
+import uuid
 from datetime import datetime, timezone
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 import torch
@@ -46,6 +47,7 @@ from pydantic import BaseModel, Field
 from computer_use import execute_computer_command, get_computer_state
 from model.gpt import GPT, GPTConfig
 from model.hf_backend import HFModel, is_hf_model
+from tools import TOOL_SCHEMAS, call_tool, get_tool_schemas
 
 # ─── App ─────────────────────────────────────────────────────────────────────
 
@@ -1847,9 +1849,23 @@ async def api_embed(req: EmbeddingsRequest):
 
 # ─── OpenAI-compatible endpoints ─────────────────────────────────────────────
 
+class OAIToolCallFunction(BaseModel):
+    name: str
+    arguments: str  # JSON string
+
+
+class OAIToolCall(BaseModel):
+    id: str = ""
+    type: str = "function"
+    function: OAIToolCallFunction
+
+
 class OAIChatMessage(BaseModel):
     role: str
-    content: str
+    content: Optional[str] = None
+    tool_calls: Optional[list[OAIToolCall]] = None
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None  # for tool role
 
 
 class OAIChatRequest(BaseModel):
@@ -1860,6 +1876,8 @@ class OAIChatRequest(BaseModel):
     top_p: float = 1.0
     max_tokens: int = 256
     n: int = 1
+    tools: Optional[list[dict]] = None
+    tool_choice: Optional[Any] = None
 
 
 class OAICompletionRequest(BaseModel):
@@ -1909,9 +1927,55 @@ async def _oai_stream_chat(model_name, messages, temperature, top_k, max_tokens)
     yield "data: [DONE]\n\n"
 
 
+def _inject_tools_into_messages(messages: list[dict], tools: list[dict]) -> list[dict]:
+    """
+    Với model nhỏ không hỗ trợ function calling native,
+    inject tool descriptions vào system prompt theo ReAct format.
+    """
+    tools_text = "\n".join(
+        f"- {t['function']['name']}: {t['function']['description']}"
+        for t in tools
+    )
+    inject = (
+        "\n\n[TOOLS AVAILABLE — gọi bằng: Action: tool_name({\"key\": \"val\"})]\n"
+        + tools_text
+        + "\n[Khi hoàn thành: Final Answer: câu trả lời]"
+    )
+
+    result = []
+    found_system = False
+    for msg in messages:
+        if msg.get("role") == "system" and not found_system:
+            result.append({**msg, "content": (msg.get("content") or "") + inject})
+            found_system = True
+        else:
+            # Chuẩn hóa tool messages thành user messages cho model nhỏ
+            if msg.get("role") == "tool":
+                result.append({
+                    "role": "user",
+                    "content": f"[Tool result for {msg.get('tool_call_id', '')}]: {msg.get('content', '')}",
+                })
+            elif msg.get("role") == "assistant" and msg.get("tool_calls"):
+                tc_texts = []
+                for tc in (msg.get("tool_calls") or []):
+                    fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                    tc_texts.append(f"Action: {fn.get('name', '')}({fn.get('arguments', '{}')})")
+                result.append({
+                    "role": "assistant",
+                    "content": (msg.get("content") or "") + "\n" + "\n".join(tc_texts),
+                })
+            else:
+                result.append(msg)
+
+    if not found_system:
+        result.insert(0, {"role": "system", "content": "Bạn là AI assistant đa năng." + inject})
+
+    return result
+
+
 @app.post("/v1/chat/completions")
 async def oai_chat_completions(req: OAIChatRequest):
-    """OpenAI-compatible chat completions."""
+    """OpenAI-compatible chat completions với tool calling support."""
     model_name = req.model or _default_model
     if not model_name:
         models = _discover_models()
@@ -1919,7 +1983,12 @@ async def oai_chat_completions(req: OAIChatRequest):
             raise HTTPException(404, "No models found.")
         model_name = models[-1]
 
-    messages = [m.model_dump() for m in req.messages]
+    messages = [m.model_dump(exclude_none=True) for m in req.messages]
+
+    # Tool calling: nếu có tools, inject vào prompt (local model không hỗ trợ native)
+    effective_tools = req.tools or []
+    if effective_tools:
+        messages = _inject_tools_into_messages(messages, effective_tools)
 
     try:
         if req.stream:
@@ -1933,6 +2002,18 @@ async def oai_chat_completions(req: OAIChatRequest):
             data = json.loads(chunk)
             full += data.get("message", {}).get("content", "")
 
+        # Parse tool calls từ output nếu có tools
+        parsed_tool_calls = None
+        finish_reason = "stop"
+        if effective_tools and "Action:" in full:
+            parsed_tool_calls = _parse_tool_calls_from_text(full)
+            if parsed_tool_calls:
+                finish_reason = "tool_calls"
+
+        choice_msg = {"role": "assistant", "content": full}
+        if parsed_tool_calls:
+            choice_msg["tool_calls"] = parsed_tool_calls
+
         return {
             "id": f"chatcmpl-{int(time.time())}",
             "object": "chat.completion",
@@ -1941,14 +2022,32 @@ async def oai_chat_completions(req: OAIChatRequest):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": full},
-                    "finish_reason": "stop",
+                    "message": choice_msg,
+                    "finish_reason": finish_reason,
                 }
             ],
             "usage": {"prompt_tokens": 0, "completion_tokens": len(full), "total_tokens": len(full)},
         }
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
+
+
+def _parse_tool_calls_from_text(text: str) -> list[dict] | None:
+    """Extract tool calls từ ReAct format text."""
+    import re as _re
+    calls = []
+    for m in _re.finditer(r"Action:\s*(\w+)\s*\((\{.*?\})\)", text, _re.DOTALL):
+        name = m.group(1)
+        try:
+            args = json.loads(m.group(2))
+        except json.JSONDecodeError:
+            args = {}
+        calls.append({
+            "id": f"call_{uuid.uuid4().hex[:8]}",
+            "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)},
+        })
+    return calls if calls else None
 
 
 class OAIEmbeddingRequest(BaseModel):
@@ -2073,6 +2172,187 @@ async def root_head():
     return {}
 
 
+# ─── Agent & Tools endpoints ──────────────────────────────────────────────────
+
+class AgentRequest(BaseModel):
+    task: str
+    model: str = ""
+    tools: Optional[list[str]] = None   # tên tools; None = tất cả
+    system_prompt: str = ""
+    max_steps: int = 10
+    temperature: float = 0.2
+    max_tokens: int = 1024
+    mode: str = "auto"  # "auto" | "react" | "function_calling"
+
+
+class AgentStreamRequest(AgentRequest):
+    stream: bool = True
+
+
+@app.post("/v1/agent")
+async def v1_agent(req: AgentRequest):
+    """
+    Chạy agent hoàn thành nhiệm vụ với tool use.
+
+    Agent sẽ:
+    1. Nhận nhiệm vụ (task)
+    2. Tự động chọn và gọi tools
+    3. Lặp cho đến khi hoàn thành (tối đa max_steps bước)
+    4. Trả về kết quả + trace
+
+    Ví dụ:
+        POST /v1/agent
+        {"task": "Tìm hiểu Python asyncio và tóm tắt"}
+    """
+    from agent import run_agent, format_result
+
+    model_name = req.model or _default_model
+    if not model_name:
+        models_list = _discover_models()
+        model_name = models_list[-1] if models_list else "chat_vi"
+
+    result = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: run_agent(
+            task=req.task,
+            model=model_name,
+            server_url=f"http://127.0.0.1:{_server_port}",
+            tools=req.tools,
+            system_prompt=req.system_prompt,
+            max_steps=req.max_steps,
+            temperature=req.temperature,
+            max_tokens=req.max_tokens,
+            mode=req.mode,
+        )
+    )
+
+    return {
+        "answer": result.answer,
+        "model": result.model,
+        "elapsed": result.elapsed,
+        "success": result.success,
+        "error": result.error,
+        "steps": [
+            {
+                "step": s.step,
+                "thought": s.thought,
+                "is_final": s.is_final,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "name": tc.name,
+                        "arguments": tc.arguments,
+                        "result": tc.result[:2000],
+                    }
+                    for tc in s.tool_calls
+                ],
+            }
+            for s in result.steps
+        ],
+    }
+
+
+@app.get("/v1/tools")
+async def v1_list_tools():
+    """Liệt kê tất cả tools có sẵn cho agent."""
+    schemas = get_tool_schemas()
+    return {
+        "tools": [
+            {
+                "name": s["function"]["name"],
+                "description": s["function"]["description"],
+                "parameters": s["function"]["parameters"],
+            }
+            for s in schemas
+        ],
+        "count": len(schemas),
+    }
+
+
+@app.post("/v1/tools/call")
+async def v1_call_tool(req: dict):
+    """
+    Gọi trực tiếp một tool.
+
+    Body: {"name": "read_file", "arguments": {"path": "README.md"}}
+    """
+    name = req.get("name", "")
+    arguments = req.get("arguments", {})
+    if not name:
+        raise HTTPException(400, "Thiếu tên tool ('name')")
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: call_tool(name, arguments)
+    )
+    return {"name": name, "result": result}
+
+
+# ─── MCP server management ────────────────────────────────────────────────────
+
+class MCPServerConfig(BaseModel):
+    name: str
+    url: str
+
+
+@app.get("/v1/mcp/servers")
+async def v1_mcp_list():
+    """Liệt kê các MCP servers đang kết nối."""
+    from mcp_client import get_mcp_client
+    client = get_mcp_client()
+    return {
+        "servers": [
+            {
+                "name": s.name,
+                "url": s.url,
+                "connected": s.connected,
+                "tools": [{"name": t.name, "description": t.description} for t in s.tools],
+                "error": s.error,
+            }
+            for s in client.list_servers()
+        ]
+    }
+
+
+@app.post("/v1/mcp/servers")
+async def v1_mcp_add(cfg: MCPServerConfig):
+    """Kết nối tới một MCP server mới."""
+    from mcp_client import get_mcp_client
+    client = get_mcp_client()
+    server = await client.add_server(cfg.name, cfg.url)
+    return {
+        "name": server.name,
+        "url": server.url,
+        "connected": server.connected,
+        "tools_count": len(server.tools),
+        "error": server.error,
+    }
+
+
+@app.delete("/v1/mcp/servers/{name}")
+async def v1_mcp_remove(name: str):
+    """Ngắt kết nối MCP server."""
+    from mcp_client import get_mcp_client
+    client = get_mcp_client()
+    client.remove_server(name)
+    return {"removed": name}
+
+
+@app.get("/v1/mcp/tools")
+async def v1_mcp_tools():
+    """Liệt kê tất cả tools từ các MCP servers đang kết nối."""
+    from mcp_client import get_mcp_client
+    client = get_mcp_client()
+    return {
+        "tools": [
+            {"name": t.name, "description": t.description}
+            for t in client.all_tools()
+        ]
+    }
+
+
+# Port hiện tại (dùng cho agent self-call)
+_server_port: int = 11434
+
+
 # ─── CLI entry point ──────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -2088,6 +2368,7 @@ if __name__ == "__main__":
     _default_model = args.model
     _data_dir = args.data_dir
     _checkpoints_dir = args.checkpoints_dir
+    _server_port = args.port
 
     ui_host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host
     print(f"AI-local server starting on http://{args.host}:{args.port}")

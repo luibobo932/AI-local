@@ -16,3 +16,7 @@ comtypes>=1.4.0
 peft>=0.10.0
 # Optional — giao diện chat Gradio (python app.py) cho Colab / link công khai
 gradio>=5.0.0
+
+# Agent framework & tools
+# (tất cả thư viện agent dùng stdlib Python, không cần cài thêm)
+# MCP client: httpx đã có ở trên
