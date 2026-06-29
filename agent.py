@@ -60,6 +60,7 @@ class AgentConfig:
     mode: str = "auto"  # "auto" | "react" | "function_calling"
     timeout: float = 60.0
     on_step: Optional[object] = None  # callback(AgentStep) gọi sau mỗi bước (cho streaming)
+    policy: Optional[object] = None   # PermissionPolicy kiểm soát quyền tool
 
 
 # ─── Kết quả ──────────────────────────────────────────────────────────────────
@@ -257,7 +258,7 @@ def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
             except json.JSONDecodeError:
                 args = {}
 
-            result = call_tool(name, args)
+            result = call_tool(name, args, policy=cfg.policy)
             tool_call = ToolCall(id=tc_id, name=name, arguments=args, result=result)
             step.tool_calls.append(tool_call)
 
@@ -346,7 +347,7 @@ def _run_react(task: str, cfg: AgentConfig) -> AgentResult:
             # Parse: tool_name({"key": "val"}) hoặc tool_name(key=val)
             tool_name, tool_args = _parse_action(action_text)
             if tool_name:
-                result = call_tool(tool_name, tool_args)
+                result = call_tool(tool_name, tool_args, policy=cfg.policy)
                 tc = ToolCall(id=f"react_{step_num}", name=tool_name, arguments=tool_args, result=result)
                 step.tool_calls.append(tc)
                 step.observation = result
@@ -490,6 +491,9 @@ def run_agent(
     skill: str = "",
     use_memory: bool = True,
     on_step=None,
+    permission_mode: str = "auto",
+    allow_tools=None,
+    deny_tools=None,
 ) -> AgentResult:
     """
     Chạy agent để hoàn thành nhiệm vụ.
@@ -532,6 +536,19 @@ def run_agent(
         if prefix:
             system_prompt = f"{system_prompt}\n\n{prefix}"
 
+    # Tạo permission policy
+    from tools.permissions import make_policy
+    policy = make_policy(permission_mode, allow_tools, deny_tools)
+
+    # Ở chế độ plan, nhắc model rằng nó chỉ được lập kế hoạch
+    if permission_mode in ("plan", "readonly"):
+        system_prompt += (
+            "\n\n## CHẾ ĐỘ PLAN\n"
+            "Bạn ĐANG ở chế độ chỉ-đọc. KHÔNG được ghi/sửa file hay chạy lệnh. "
+            "Hãy khám phá, phân tích, rồi trình bày KẾ HOẠCH thay đổi chi tiết "
+            "(file nào, sửa gì) để người dùng duyệt — đừng cố thực thi."
+        )
+
     cfg = AgentConfig(
         model=model,
         server_url=server_url,
@@ -543,6 +560,7 @@ def run_agent(
         mode=mode,
         timeout=timeout,
         on_step=on_step,
+        policy=policy,
     )
 
     # Auto-detect mode: thử function_calling trước

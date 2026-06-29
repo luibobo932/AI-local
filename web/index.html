@@ -427,6 +427,10 @@
             <input id="agentEnabled" type="checkbox">
             <span>🤖 Agent</span>
           </label>
+          <label class="cu-toggle" id="planToggle" title="Chế độ chỉ-đọc: agent lập kế hoạch, không sửa file">
+            <input id="planEnabled" type="checkbox">
+            <span>📋 Plan</span>
+          </label>
           <label class="cu-toggle" id="computerUseToggle">
             <input id="computerUseEnabled" type="checkbox">
             <span>🖥 Điều khiển máy</span>
@@ -575,6 +579,8 @@ sendBtn.onclick = () => send();
 
 const agentToggle = document.getElementById('agentToggle');
 const agentEnabled = document.getElementById('agentEnabled');
+const planToggle = document.getElementById('planToggle');
+const planEnabled = document.getElementById('planEnabled');
 agentEnabled.checked = false;
 agentToggle.classList.toggle('active', agentEnabled.checked);
 agentEnabled.addEventListener('change', () => {
@@ -583,6 +589,11 @@ agentEnabled.addEventListener('change', () => {
     computerUseEnabled.checked = false;
     computerUseToggle.classList.remove('active');
   }
+});
+
+planEnabled.checked = false;
+planEnabled.addEventListener('change', () => {
+  planToggle.classList.toggle('active', planEnabled.checked);
 });
 
 computerUseEnabled.checked = false;
@@ -920,6 +931,7 @@ async function send(overrideText = null) {
           temperature: 0.2,
           max_tokens: 512,
           mode: 'auto',
+          permission_mode: planEnabled.checked ? 'plan' : 'auto',
         })
       });
       if (!resp.ok || !resp.body) throw new Error('Server trả lỗi ' + resp.status);

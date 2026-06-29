@@ -33,6 +33,7 @@ Ngoài chat, AI-local còn là **agent** biết tự dùng công cụ để hoà
 python cli.py serve                                    # khởi động server
 python cli.py agent "đọc README.md và tóm tắt" -v      # chạy agent, hiện từng bước
 python cli.py agent "tìm và sửa bug X" --skill fix-bug # áp dụng skill
+python cli.py agent "đề xuất cải thiện server.py" --plan  # chế độ chỉ-đọc (lập kế hoạch)
 python cli.py tools                                    # 16 tools có sẵn
 python cli.py skills list                              # workflow đóng gói
 python cli.py repomap                                  # bản đồ codebase (kiểu Aider)
@@ -41,11 +42,12 @@ python cli.py sessions list                            # phiên đã lưu
 python cli.py mcp add fs http://localhost:3001         # kết nối MCP server
 ```
 
-Hoặc bật toggle **🤖 Agent** ngay trên giao diện web. Agent tự động:
+Hoặc bật toggle **🤖 Agent** ngay trên giao diện web (kèm **📋 Plan** cho chế độ chỉ-đọc). Agent tự động:
 - Đọc **project memory** (`AILOCAL.md`) + **auto-memory** vào ngữ cảnh
 - Sinh **repo map** để hiểu cấu trúc codebase
 - Chọn & gọi tools theo vòng lặp (đọc/ghi file, chạy shell, search web, git, MCP...)
 - Tự **ghi nhớ** điều học được cho phiên sau (`remember` tool)
+- **Permission modes** kiểu Claude Code: `auto` (cho phép tất cả) · `plan` (chỉ đọc, lập kế hoạch) · `approve` (ghi cần allowlist)
 
 **API:** `POST /v1/agent` · `POST /v1/agent/stream` (SSE, hiện từng bước live) · `GET /v1/tools` · `GET /v1/skills` · `GET /v1/memory` · `GET /v1/sessions` · `GET /v1/repomap` · `GET/POST /v1/mcp/servers`
 

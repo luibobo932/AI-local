@@ -2186,6 +2186,9 @@ class AgentRequest(BaseModel):
     skill: str = ""                     # skill áp dụng (rỗng = không)
     use_memory: bool = True             # auto load project memory
     session_id: str = ""                # lưu vào phiên này (rỗng = không lưu)
+    permission_mode: str = "auto"       # auto | plan | approve | readonly
+    allow_tools: Optional[list[str]] = None  # tool cho phép kể cả mode hạn chế
+    deny_tools: Optional[list[str]] = None   # tool luôn chặn
 
 
 class AgentStreamRequest(AgentRequest):
@@ -2229,6 +2232,9 @@ async def v1_agent(req: AgentRequest):
             mode=req.mode,
             skill=req.skill,
             use_memory=req.use_memory,
+            permission_mode=req.permission_mode,
+            allow_tools=req.allow_tools,
+            deny_tools=req.deny_tools,
         )
     )
 
@@ -2313,6 +2319,9 @@ async def v1_agent_stream(req: AgentRequest):
                 skill=req.skill,
                 use_memory=req.use_memory,
                 on_step=_on_step,
+                permission_mode=req.permission_mode,
+                allow_tools=req.allow_tools,
+                deny_tools=req.deny_tools,
             )
             event_q.put({
                 "type": "done",

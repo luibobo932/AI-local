@@ -408,11 +408,28 @@ def get_tool_schemas(names: list[str] | None = None) -> list[dict]:
     return [s for s in TOOL_SCHEMAS if s["function"]["name"] in names]
 
 
-def call_tool(name: str, arguments: dict) -> str:
-    """Gọi một tool theo tên và trả về kết quả dạng string."""
+def call_tool(name: str, arguments: dict, policy=None) -> str:
+    """
+    Gọi một tool theo tên và trả về kết quả dạng string.
+
+    Args:
+        name: tên tool
+        arguments: tham số
+        policy: PermissionPolicy tùy chọn — nếu chặn, trả về thông báo thay vì chạy
+    """
     fn = TOOL_REGISTRY.get(name)
     if fn is None:
         return f"[ERROR] Tool '{name}' không tồn tại. Có sẵn: {list(TOOL_REGISTRY)}"
+
+    # Kiểm tra quyền
+    if policy is not None:
+        try:
+            allowed, reason = policy.check(name, arguments)
+        except Exception:
+            allowed, reason = True, ""
+        if not allowed:
+            return f"[BLOCKED] {reason}"
+
     try:
         result = fn(**arguments)
         return str(result) if not isinstance(result, str) else result

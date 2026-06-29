@@ -504,6 +504,9 @@ def cmd_agent(args):
     tools = [t.strip() for t in args.tools.split(",")] if args.tools else None
 
     skill = getattr(args, "skill", "") or ""
+    permission_mode = "plan" if getattr(args, "plan", False) else getattr(args, "permission_mode", "auto")
+    allow_tools = [t.strip() for t in args.allow.split(",")] if getattr(args, "allow", "") else None
+    deny_tools = [t.strip() for t in args.deny.split(",")] if getattr(args, "deny", "") else None
 
     print(f"\n{BOLD}🤖 Agent đang chạy...{RESET}")
     print(f"Task: {task}")
@@ -513,7 +516,7 @@ def cmd_agent(args):
         print(f"Skill: {skill}")
     if model:
         print(f"Model: {model}")
-    print(f"Mode: {args.mode}")
+    print(f"Mode: {args.mode}  ·  Permission: {permission_mode}")
     print("─" * 60)
 
     payload = json.dumps({
@@ -525,6 +528,9 @@ def cmd_agent(args):
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,
         "mode": args.mode,
+        "permission_mode": permission_mode,
+        "allow_tools": allow_tools,
+        "deny_tools": deny_tools,
     }).encode()
 
     try:
@@ -783,6 +789,12 @@ def main():
     p_agent.add_argument("--temperature", type=float, default=0.2)
     p_agent.add_argument("--max-tokens", type=int, default=1024, dest="max_tokens")
     p_agent.add_argument("--mode", choices=["auto", "react", "function_calling"], default="auto")
+    p_agent.add_argument("--permission-mode", dest="permission_mode",
+                         choices=["auto", "plan", "approve", "readonly"], default="auto",
+                         help="auto=cho phép tất cả; plan=chỉ đọc/lập kế hoạch; approve=ghi cần allowlist")
+    p_agent.add_argument("--plan", action="store_true", help="Tắt: chế độ chỉ-đọc (alias --permission-mode plan)")
+    p_agent.add_argument("--allow", default="", help="Tool luôn cho phép (cách nhau dấu phẩy)")
+    p_agent.add_argument("--deny", default="", help="Tool luôn chặn (cách nhau dấu phẩy)")
     p_agent.add_argument("--verbose", "-v", action="store_true", help="Hiển thị từng bước chi tiết")
     p_agent.set_defaults(func=cmd_agent)
 
