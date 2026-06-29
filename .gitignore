@@ -5,3 +5,9 @@ data/*.txt
 data/*.pkl
 __pycache__/
 *.pyc
+server-*.log
+model-inspect/
+logs/
+output/
+.desktop-profile/
+.playwright-cli/

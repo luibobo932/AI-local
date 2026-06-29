@@ -1,0 +1,15 @@
+FROM hf.co/vinai/PhoGPT-4B-Chat-gguf:Q4_K_M
+
+# Template chinh thuc cua PhoGPT-4B-Chat:
+# PROMPT_TEMPLATE = "### Cau hoi: {instruction}\n### Tra loi:"
+TEMPLATE """{{ if .System }}### Câu hỏi: {{ .System }}
+### Trả lời: Tôi đã hiểu.
+{{ end }}{{ range .Messages }}{{ if eq .Role "user" }}### Câu hỏi: {{ .Content }}
+{{ else if eq .Role "assistant" }}### Trả lời: {{ .Content }}
+{{ end }}{{ end }}### Trả lời:
+"""
+
+PARAMETER stop "### Câu hỏi:"
+PARAMETER stop "### Trả lời:"
+PARAMETER stop "<|endoftext|>"
+PARAMETER temperature 0.2
