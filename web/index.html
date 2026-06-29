@@ -315,6 +315,71 @@
   #send:disabled { opacity: .45; cursor: not-allowed; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; text-align: center; }
 
+  /* Agent mode */
+  .agent-steps { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
+  .agent-step {
+    border: 1px solid rgba(47,111,179,.2);
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 13px;
+  }
+  .agent-step-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 11px;
+    background: rgba(47,111,179,.07);
+    cursor: pointer;
+    user-select: none;
+  }
+  .agent-step-header:hover { background: rgba(47,111,179,.12); }
+  .agent-step-icon { font-size: 15px; }
+  .agent-step-title { font-weight: 600; color: var(--denim-2); flex: 1; }
+  .agent-step-toggle { color: var(--muted); font-size: 11px; }
+  .agent-step-body {
+    padding: 8px 11px;
+    border-top: 1px solid rgba(47,111,179,.15);
+    display: none;
+  }
+  .agent-step-body.open { display: block; }
+  .agent-thought { color: #555; margin-bottom: 6px; font-style: italic; }
+  .agent-tool-call {
+    background: #f0f4ff;
+    border: 1px solid #c5d3f7;
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin: 4px 0;
+    font-family: monospace;
+    font-size: 12px;
+  }
+  .agent-tool-name { color: var(--denim); font-weight: 700; }
+  .agent-tool-args { color: #444; word-break: break-all; }
+  .agent-tool-result {
+    background: #f9fafb;
+    border-left: 3px solid #28b463;
+    padding: 4px 8px;
+    margin-top: 4px;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    overflow-y: auto;
+    color: #333;
+  }
+  .agent-answer-label {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .agent-meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
   @media (max-width: 820px) {
     body { padding: 0; }
     .desktop-shell { height: 100dvh; min-height: 100dvh; grid-template-columns: 1fr; border-radius: 0; }
@@ -358,9 +423,17 @@
           <p>Hỏi nhanh về nhà phố, lọc căn theo quận, giá, ngang, diện tích.</p>
         </div>
         <div class="toolbar">
+          <label class="cu-toggle" id="agentToggle">
+            <input id="agentEnabled" type="checkbox">
+            <span>🤖 Agent</span>
+          </label>
+          <label class="cu-toggle" id="planToggle" title="Chế độ chỉ-đọc: agent lập kế hoạch, không sửa file">
+            <input id="planEnabled" type="checkbox">
+            <span>📋 Plan</span>
+          </label>
           <label class="cu-toggle" id="computerUseToggle">
             <input id="computerUseEnabled" type="checkbox">
-            <span>Điều khiển máy</span>
+            <span>🖥 Điều khiển máy</span>
           </label>
           <select id="model" aria-label="Chọn model"></select>
           <button class="ghost-btn" id="clear" type="button">Xóa chat</button>
@@ -429,6 +502,31 @@ const samples = [
   "Tóm tắt căn phù hợp để gọi khách"
 ];
 
+const agentSamples = [
+  "🔍 Tìm kiếm web: Python asyncio là gì?",
+  "📁 Liệt kê các file Python trong dự án",
+  "📖 Đọc file README.md và tóm tắt",
+  "🌐 Lấy nội dung https://python.org",
+];
+
+agentEnabled.addEventListener('change', () => {
+  chips.innerHTML = '';
+  const list = agentEnabled.checked ? agentSamples : samples;
+  list.forEach((sample) => {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.type = 'button';
+    chip.textContent = sample;
+    chip.onclick = () => {
+      input.value = agentEnabled.checked
+        ? sample.replace(/^[^\s]+\s/, '')  // bỏ emoji prefix
+        : sample;
+      send();
+    };
+    chips.appendChild(chip);
+  });
+});
+
 const chips = document.getElementById('chips');
 samples.forEach((sample) => {
   const chip = document.createElement('button');
@@ -479,10 +577,33 @@ input.addEventListener('keydown', (event) => {
 
 sendBtn.onclick = () => send();
 
+const agentToggle = document.getElementById('agentToggle');
+const agentEnabled = document.getElementById('agentEnabled');
+const planToggle = document.getElementById('planToggle');
+const planEnabled = document.getElementById('planEnabled');
+agentEnabled.checked = false;
+agentToggle.classList.toggle('active', agentEnabled.checked);
+agentEnabled.addEventListener('change', () => {
+  agentToggle.classList.toggle('active', agentEnabled.checked);
+  if (agentEnabled.checked) {
+    computerUseEnabled.checked = false;
+    computerUseToggle.classList.remove('active');
+  }
+});
+
+planEnabled.checked = false;
+planEnabled.addEventListener('change', () => {
+  planToggle.classList.toggle('active', planEnabled.checked);
+});
+
 computerUseEnabled.checked = false;
 computerUseToggle.classList.toggle('active', computerUseEnabled.checked);
 computerUseEnabled.addEventListener('change', () => {
   computerUseToggle.classList.toggle('active', computerUseEnabled.checked);
+  if (computerUseEnabled.checked) {
+    agentEnabled.checked = false;
+    agentToggle.classList.remove('active');
+  }
 });
 
 document.getElementById('clear').onclick = () => {
@@ -693,6 +814,91 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function renderAgentResult(bubble, result) {
+  bubble.textContent = '';
+
+  const steps = result.steps || [];
+  if (steps.length > 0) {
+    const stepsEl = document.createElement('div');
+    stepsEl.className = 'agent-steps';
+
+    steps.forEach((step) => {
+      const stepEl = document.createElement('div');
+      stepEl.className = 'agent-step';
+
+      const header = document.createElement('div');
+      header.className = 'agent-step-header';
+      const icon = step.is_final ? '✅' : (step.tool_calls?.length ? '🔧' : '💭');
+      header.innerHTML = `
+        <span class="agent-step-icon">${icon}</span>
+        <span class="agent-step-title">Bước ${step.step}${step.is_final ? ' — Hoàn thành' : ''}</span>
+        <span class="agent-step-toggle">▼</span>
+      `;
+
+      const body = document.createElement('div');
+      body.className = 'agent-step-body';
+
+      if (step.thought) {
+        const t = document.createElement('div');
+        t.className = 'agent-thought';
+        t.textContent = step.thought;
+        body.appendChild(t);
+      }
+
+      (step.tool_calls || []).forEach((tc) => {
+        const callEl = document.createElement('div');
+        callEl.className = 'agent-tool-call';
+        const argsStr = JSON.stringify(tc.arguments || {}, null, 2);
+        callEl.innerHTML = `
+          <div><span class="agent-tool-name">${escapeHtml(tc.name)}</span>
+          <span class="agent-tool-args">(${escapeHtml(argsStr)})</span></div>
+          <div class="agent-tool-result">${escapeHtml((tc.result || '').slice(0, 600))}</div>
+        `;
+        body.appendChild(callEl);
+      });
+
+      header.onclick = () => body.classList.toggle('open');
+      stepEl.appendChild(header);
+      stepEl.appendChild(body);
+      stepsEl.appendChild(stepEl);
+    });
+
+    // Khi đang stream: tự mở bước mới nhất để thấy agent đang làm gì
+    if (result.streaming) {
+      const lastBody = stepsEl.lastChild && stepsEl.lastChild.querySelector('.agent-step-body');
+      if (lastBody) lastBody.classList.add('open');
+    }
+
+    bubble.appendChild(stepsEl);
+  }
+
+  // Đang stream và chưa có câu trả lời → hiện chỉ báo đang chạy
+  if (result.streaming && !result.answer) {
+    const running = document.createElement('div');
+    running.className = 'agent-meta';
+    running.textContent = `⏳ Đang làm... (${steps.length} bước)`;
+    bubble.appendChild(running);
+    scrollChatToBottom();
+    return;
+  }
+
+  const answerLabel = document.createElement('div');
+  answerLabel.className = 'agent-answer-label';
+  answerLabel.textContent = '💬 Câu trả lời';
+  bubble.appendChild(answerLabel);
+
+  const answerEl = document.createElement('div');
+  answerEl.textContent = result.answer || '(không có câu trả lời)';
+  bubble.appendChild(answerEl);
+
+  const meta = document.createElement('div');
+  meta.className = 'agent-meta';
+  meta.textContent = `Model: ${result.model} · ${steps.length} bước · ${(result.elapsed || 0).toFixed(1)}s`;
+  bubble.appendChild(meta);
+
+  scrollChatToBottom();
+}
+
 async function send(overrideText = null) {
   const text = (overrideText ?? input.value).trim();
   if (!text || busy) return;
@@ -710,6 +916,69 @@ async function send(overrideText = null) {
   bot.classList.add('typing');
   let answer = '';
 
+  // ── Agent mode (streaming) ───────────────────────────────────────────────────
+  if (agentEnabled.checked) {
+    bot.textContent = '🤖 Agent đang chạy...';
+    const liveSteps = [];
+    try {
+      const resp = await fetch('/v1/agent/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task: text,
+          model: modelSel.value || '',
+          max_steps: 8,
+          temperature: 0.2,
+          max_tokens: 512,
+          mode: 'auto',
+          permission_mode: planEnabled.checked ? 'plan' : 'auto',
+        })
+      });
+      if (!resp.ok || !resp.body) throw new Error('Server trả lỗi ' + resp.status);
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let done = false;
+      bot.classList.remove('typing');
+
+      while (!done) {
+        const { done: rdone, value } = await reader.read();
+        if (rdone) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const payload = trimmed.slice(5).trim();
+          if (payload === '[DONE]') { done = true; break; }
+          let ev;
+          try { ev = JSON.parse(payload); } catch { continue; }
+
+          if (ev.type === 'step') {
+            liveSteps.push(ev.step);
+            renderAgentResult(bot, { steps: liveSteps, answer: '', model: modelSel.value, elapsed: 0, streaming: true });
+          } else if (ev.type === 'done') {
+            renderAgentResult(bot, ev);
+            answer = ev.answer || '';
+          } else if (ev.type === 'error') {
+            bot.textContent = '❌ Lỗi agent: ' + (ev.error || '');
+          }
+        }
+      }
+    } catch (error) {
+      bot.classList.remove('typing');
+      bot.textContent = 'Lỗi agent: ' + error.message;
+    }
+    if (answer.trim()) history.push({ role: 'assistant', content: answer });
+    busy = false;
+    sendBtn.disabled = false;
+    input.focus();
+    return;
+  }
+
+  // ── Chat mode (streaming) ────────────────────────────────────────────────────
   try {
     const isSmallVi = modelSel.value === 'chat_vi';
     const resp = await fetch('/api/chat', {

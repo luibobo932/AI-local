@@ -11,3 +11,7 @@ logs/
 output/
 .desktop-profile/
 .playwright-cli/
+# Runtime state của agent: sessions + auto-memory (per-machine)
+.ai-local/
+# Cấu hình local — KHÔNG commit (chứa key/secret). Dùng .env.example làm mẫu.
+.env

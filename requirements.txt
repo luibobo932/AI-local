@@ -1,3 +1,17 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MVP Minion (AI coding agent local) — KHÔNG cần dependency nào!
+#
+#   python minion.py serve        # HTTP API: /chat, /agent/run
+#   python minion.py agent "..."  # agent CLI
+#   python minion.py chat         # chat tương tác
+#
+# Chỉ cần Python 3.10+ và một LLM endpoint (Ollama / LM Studio / OpenAI).
+# llm.py, agent.py, tools/ đều dùng stdlib (urllib) — không cần cài gì.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Optional: train / chạy model built-in + server FastAPI ──────────────────
+# Chỉ cần khi dùng server.py (REST API đầy đủ) hoặc train model local.
+# Cài bằng: pip install -r requirements.txt
 torch>=2.1.0
 numpy>=1.24.0
 tiktoken>=0.5.0
@@ -10,9 +24,13 @@ httpx>=0.27.0
 transformers>=4.40.0
 huggingface_hub>=0.22.0
 pillow>=10.0.0
+
+# ─── Optional: computer-use trên Windows ─────────────────────────────────────
 pywinauto>=0.6.9
 comtypes>=1.4.0
-# Optional — chỉ cần khi dùng LoRA fine-tune (python cli.py finetune --lora)
+
+# ─── Optional: LoRA fine-tune (python cli.py finetune --lora) ────────────────
 peft>=0.10.0
-# Optional — giao diện chat Gradio (python app.py) cho Colab / link công khai
+
+# ─── Optional: giao diện Gradio (python app.py) cho Colab / link công khai ───
 gradio>=5.0.0

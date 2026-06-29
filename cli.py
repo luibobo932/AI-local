@@ -461,6 +461,260 @@ def cmd_ps(args):
         print("Start with: python cli.py serve")
 
 
+def cmd_tools(args):
+    """Liệt kê các tools có sẵn cho agent."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f"{SERVER_URL}/v1/tools", timeout=3) as r:
+            data = json.loads(r.read())
+        tools = data.get("tools", [])
+        print(f"\n{BOLD}Tools có sẵn ({len(tools)}){RESET}")
+        print("─" * 60)
+        for t in tools:
+            print(f"  {CYAN}{t['name']:<20}{RESET}  {t['description']}")
+        print()
+    except Exception:
+        # Fallback: đọc trực tiếp từ module
+        try:
+            from tools import TOOL_SCHEMAS
+            print(f"\n{BOLD}Tools có sẵn ({len(TOOL_SCHEMAS)}){RESET}")
+            print("─" * 60)
+            for s in TOOL_SCHEMAS:
+                fn = s["function"]
+                print(f"  {CYAN}{fn['name']:<20}{RESET}  {fn['description']}")
+            print()
+        except ImportError as e:
+            print(f"{YELLOW}Không load được tools: {e}{RESET}")
+
+
+def cmd_agent(args):
+    """Chạy agent hoàn thành nhiệm vụ với tool use."""
+    import urllib.request
+
+    # Kiểm tra server
+    try:
+        urllib.request.urlopen(f"{SERVER_URL}/api/version", timeout=2)
+    except Exception:
+        print(f"{YELLOW}Server chưa chạy. Khởi động bằng: python cli.py serve{RESET}")
+        sys.exit(1)
+
+    task = " ".join(args.task) if isinstance(args.task, list) else args.task
+    model = args.model or ""
+
+    tools = [t.strip() for t in args.tools.split(",")] if args.tools else None
+
+    skill = getattr(args, "skill", "") or ""
+    permission_mode = "plan" if getattr(args, "plan", False) else getattr(args, "permission_mode", "auto")
+    allow_tools = [t.strip() for t in args.allow.split(",")] if getattr(args, "allow", "") else None
+    deny_tools = [t.strip() for t in args.deny.split(",")] if getattr(args, "deny", "") else None
+
+    print(f"\n{BOLD}🤖 Agent đang chạy...{RESET}")
+    print(f"Task: {task}")
+    if tools:
+        print(f"Tools: {', '.join(tools)}")
+    if skill:
+        print(f"Skill: {skill}")
+    if model:
+        print(f"Model: {model}")
+    print(f"Mode: {args.mode}  ·  Permission: {permission_mode}")
+    print("─" * 60)
+
+    payload = json.dumps({
+        "task": task,
+        "model": model,
+        "tools": tools,
+        "skill": skill,
+        "max_steps": args.max_steps,
+        "temperature": args.temperature,
+        "max_tokens": args.max_tokens,
+        "mode": args.mode,
+        "permission_mode": permission_mode,
+        "allow_tools": allow_tools,
+        "deny_tools": deny_tools,
+    }).encode()
+
+    try:
+        req = urllib.request.Request(
+            f"{SERVER_URL}/v1/agent",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=300) as r:
+            result = json.loads(r.read())
+    except Exception as e:
+        print(f"{YELLOW}Lỗi: {e}{RESET}")
+        sys.exit(1)
+
+    if not result.get("success"):
+        print(f"{YELLOW}Lỗi agent: {result.get('error')}{RESET}")
+        sys.exit(1)
+
+    # In trace nếu verbose
+    if args.verbose:
+        steps = result.get("steps", [])
+        for s in steps:
+            print(f"\n{BOLD}── Bước {s['step']} ──{RESET}")
+            if s.get("thought"):
+                print(f"💭 {s['thought']}")
+            for tc in s.get("tool_calls", []):
+                args_str = json.dumps(tc.get("arguments", {}), ensure_ascii=False)
+                print(f"🔧 {CYAN}{tc['name']}{RESET}({args_str})")
+                res_preview = tc.get("result", "")[:300]
+                if res_preview:
+                    print(f"   → {res_preview}")
+
+    # In câu trả lời
+    answer = result.get("answer", "")
+    elapsed = result.get("elapsed", 0)
+    n_steps = len(result.get("steps", []))
+
+    print(f"\n{GREEN}{'─'*60}{RESET}")
+    print(f"{BOLD}✅ Hoàn thành{RESET} ({result.get('model')}, {n_steps} bước, {elapsed:.1f}s)")
+    print()
+    print(answer)
+    print()
+
+
+def cmd_mcp(args):
+    """Quản lý MCP servers."""
+    import urllib.request
+
+    try:
+        urllib.request.urlopen(f"{SERVER_URL}/api/version", timeout=2)
+    except Exception:
+        print(f"{YELLOW}Server chưa chạy.{RESET}")
+        sys.exit(1)
+
+    if args.mcp_cmd == "list":
+        with urllib.request.urlopen(f"{SERVER_URL}/v1/mcp/servers", timeout=5) as r:
+            data = json.loads(r.read())
+        servers = data.get("servers", [])
+        if not servers:
+            print("Chưa kết nối MCP server nào.")
+            print("Thêm: python cli.py mcp add <name> <url>")
+            return
+        print(f"\n{BOLD}MCP Servers ({len(servers)}){RESET}")
+        print("─" * 60)
+        for s in servers:
+            status = f"{GREEN}●{RESET}" if s["connected"] else f"{YELLOW}✗{RESET}"
+            print(f"  {status} {s['name']:<20} {s['url']}")
+            if s["connected"]:
+                print(f"     Tools: {', '.join(t['name'] for t in s['tools'][:5])}")
+            elif s.get("error"):
+                print(f"     {YELLOW}Lỗi: {s['error']}{RESET}")
+
+    elif args.mcp_cmd == "add":
+        payload = json.dumps({"name": args.name, "url": args.url}).encode()
+        req = urllib.request.Request(
+            f"{SERVER_URL}/v1/mcp/servers",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+        if data.get("connected"):
+            print(f"{GREEN}✅ Kết nối thành công: {args.name} ({data['tools_count']} tools){RESET}")
+        else:
+            print(f"{YELLOW}Kết nối thất bại: {data.get('error')}{RESET}")
+
+    elif args.mcp_cmd == "remove":
+        req = urllib.request.Request(
+            f"{SERVER_URL}/v1/mcp/servers/{args.name}",
+            method="DELETE",
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read())
+        print(f"Đã xóa: {data.get('removed')}")
+
+
+def cmd_skills(args):
+    """Quản lý skills (workflow đóng gói)."""
+    from skills import list_skills, load_skill, init_default_skills
+
+    action = args.skills_cmd
+    if action == "init":
+        print(init_default_skills())
+    elif action == "list":
+        skills = list_skills()
+        if not skills:
+            print("Chưa có skill nào. Tạo mẫu bằng: python cli.py skills init")
+            return
+        print(f"\n{BOLD}Skills có sẵn ({len(skills)}){RESET}")
+        print("─" * 60)
+        for s in skills:
+            print(f"  {CYAN}{s['name']:<20}{RESET} {s['description']}")
+            if s.get("tools"):
+                print(f"  {' '*20} tools: {s['tools']}")
+        print()
+    elif action == "show":
+        skill = load_skill(args.name)
+        if skill is None:
+            print(f"{YELLOW}Skill '{args.name}' không tồn tại.{RESET}")
+            return
+        print(f"\n{BOLD}{skill['name']}{RESET} — {skill['description']}")
+        print(f"Tools: {', '.join(skill['tools']) or '(tất cả)'}")
+        print("─" * 60)
+        print(skill["prompt"])
+
+
+def cmd_memory(args):
+    """Quản lý bộ nhớ dài hạn của agent."""
+    from memory import get_memory, remember, forget, init_project_memory, load_project_context
+
+    action = args.memory_cmd
+    if action == "show":
+        print(f"\n{BOLD}=== Project context ==={RESET}")
+        ctx = load_project_context(".")
+        print(ctx or "(trống)")
+    elif action == "add":
+        fact = " ".join(args.fact)
+        print(remember(fact, args.category))
+    elif action == "forget":
+        print(forget(args.keyword))
+    elif action == "init":
+        print(init_project_memory("."))
+
+
+def cmd_sessions(args):
+    """Quản lý các phiên agent/chat đã lưu."""
+    from sessions import SessionStore
+    from datetime import datetime
+
+    store = SessionStore()
+    action = args.sessions_cmd
+    if action == "list":
+        sessions = store.list_sessions()
+        if not sessions:
+            print("Chưa có phiên nào.")
+            return
+        print(f"\n{BOLD}Phiên đã lưu ({len(sessions)}){RESET}")
+        print("─" * 70)
+        for s in sessions:
+            ts = datetime.fromtimestamp(s["updated_at"]).strftime("%Y-%m-%d %H:%M")
+            print(f"  {CYAN}{s['id']}{RESET}  [{ts}]  {s['title']}")
+            print(f"  {' '*22} {s['message_count']} msg, {s['agent_run_count']} agent run")
+    elif action == "show":
+        data = store.load(args.id)
+        if data is None:
+            print(f"{YELLOW}Phiên '{args.id}' không tồn tại.{RESET}")
+            return
+        md_path = store._md_path(args.id)
+        if os.path.exists(md_path):
+            with open(md_path, encoding="utf-8") as f:
+                print(f.read())
+    elif action == "rm":
+        ok = store.delete(args.id)
+        print(f"Đã xóa: {args.id}" if ok else f"Không tìm thấy: {args.id}")
+
+
+def cmd_repomap(args):
+    """In bản đồ codebase."""
+    from repo_map import build_repo_map
+    print(build_repo_map(args.root, max_files=args.max_files))
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -520,6 +774,78 @@ def main():
     p_rm = sub.add_parser("rm", help="Delete a model checkpoint")
     p_rm.add_argument("model", help="Model name")
     p_rm.set_defaults(func=cmd_rm)
+
+    # tools
+    p_tools = sub.add_parser("tools", help="Liệt kê các tools có sẵn cho agent")
+    p_tools.set_defaults(func=cmd_tools)
+
+    # agent
+    p_agent = sub.add_parser("agent", help="Chạy agent để hoàn thành nhiệm vụ với tool use")
+    p_agent.add_argument("task", nargs="+", help="Nhiệm vụ cần thực hiện")
+    p_agent.add_argument("--model", default="", help="Model (mặc định: model đang chạy)")
+    p_agent.add_argument("--tools", default="", help="Danh sách tools cách nhau dấu phẩy (mặc định: tất cả)")
+    p_agent.add_argument("--skill", default="", help="Áp dụng skill (vd: review-code, fix-bug)")
+    p_agent.add_argument("--max-steps", type=int, default=10, dest="max_steps")
+    p_agent.add_argument("--temperature", type=float, default=0.2)
+    p_agent.add_argument("--max-tokens", type=int, default=1024, dest="max_tokens")
+    p_agent.add_argument("--mode", choices=["auto", "react", "function_calling"], default="auto")
+    p_agent.add_argument("--permission-mode", dest="permission_mode",
+                         choices=["auto", "plan", "approve", "readonly"], default="auto",
+                         help="auto=cho phép tất cả; plan=chỉ đọc/lập kế hoạch; approve=ghi cần allowlist")
+    p_agent.add_argument("--plan", action="store_true", help="Tắt: chế độ chỉ-đọc (alias --permission-mode plan)")
+    p_agent.add_argument("--allow", default="", help="Tool luôn cho phép (cách nhau dấu phẩy)")
+    p_agent.add_argument("--deny", default="", help="Tool luôn chặn (cách nhau dấu phẩy)")
+    p_agent.add_argument("--verbose", "-v", action="store_true", help="Hiển thị từng bước chi tiết")
+    p_agent.set_defaults(func=cmd_agent)
+
+    # mcp
+    p_mcp = sub.add_parser("mcp", help="Quản lý MCP servers")
+    mcp_sub = p_mcp.add_subparsers(dest="mcp_cmd", required=True)
+
+    p_mcp_list = mcp_sub.add_parser("list", help="Liệt kê MCP servers")
+    p_mcp_add = mcp_sub.add_parser("add", help="Thêm MCP server")
+    p_mcp_add.add_argument("name", help="Tên server")
+    p_mcp_add.add_argument("url", help="URL server")
+    p_mcp_rm = mcp_sub.add_parser("remove", help="Xóa MCP server")
+    p_mcp_rm.add_argument("name", help="Tên server")
+    p_mcp.set_defaults(func=cmd_mcp)
+
+    # skills
+    p_skills = sub.add_parser("skills", help="Quản lý skills (workflow đóng gói)")
+    skills_sub = p_skills.add_subparsers(dest="skills_cmd", required=True)
+    skills_sub.add_parser("list", help="Liệt kê skills")
+    skills_sub.add_parser("init", help="Tạo các skill mẫu")
+    p_skills_show = skills_sub.add_parser("show", help="Xem chi tiết một skill")
+    p_skills_show.add_argument("name", help="Tên skill")
+    p_skills.set_defaults(func=cmd_skills)
+
+    # memory
+    p_mem = sub.add_parser("memory", help="Quản lý bộ nhớ dài hạn của agent")
+    mem_sub = p_mem.add_subparsers(dest="memory_cmd", required=True)
+    mem_sub.add_parser("show", help="Xem project context + auto-memory")
+    mem_sub.add_parser("init", help="Tạo file AILOCAL.md mẫu")
+    p_mem_add = mem_sub.add_parser("add", help="Ghi một điều cần nhớ")
+    p_mem_add.add_argument("fact", nargs="+", help="Nội dung cần nhớ")
+    p_mem_add.add_argument("--category", default="general")
+    p_mem_forget = mem_sub.add_parser("forget", help="Xóa ghi nhớ chứa keyword")
+    p_mem_forget.add_argument("keyword", help="Từ khóa cần xóa")
+    p_mem.set_defaults(func=cmd_memory)
+
+    # sessions
+    p_sess = sub.add_parser("sessions", help="Quản lý các phiên agent/chat đã lưu")
+    sess_sub = p_sess.add_subparsers(dest="sessions_cmd", required=True)
+    sess_sub.add_parser("list", help="Liệt kê phiên")
+    p_sess_show = sess_sub.add_parser("show", help="Xem transcript một phiên")
+    p_sess_show.add_argument("id", help="Session ID")
+    p_sess_rm = sess_sub.add_parser("rm", help="Xóa một phiên")
+    p_sess_rm.add_argument("id", help="Session ID")
+    p_sess.set_defaults(func=cmd_sessions)
+
+    # repomap
+    p_repomap = sub.add_parser("repomap", help="In bản đồ codebase (file + symbol chính)")
+    p_repomap.add_argument("root", nargs="?", default=".", help="Thư mục gốc (mặc định: hiện tại)")
+    p_repomap.add_argument("--max-files", type=int, default=40, dest="max_files")
+    p_repomap.set_defaults(func=cmd_repomap)
 
     args = parser.parse_args()
     args.func(args)
