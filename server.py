@@ -2270,6 +2270,95 @@ async def v1_agent(req: AgentRequest):
     return response
 
 
+@app.post("/v1/agent/stream")
+async def v1_agent_stream(req: AgentRequest):
+    """
+    Chạy agent với streaming — phát từng bước (SSE) ngay khi hoàn thành.
+
+    Mỗi event:
+        data: {"type": "step", "step": {...}}      — một bước agent xong
+        data: {"type": "done", "answer": "...", "elapsed": ...}
+        data: [DONE]
+
+    Giúp UI hiển thị tiến trình agent live thay vì chờ blocking.
+    """
+    import queue as _queue
+    import threading
+
+    from agent import run_agent, step_to_dict
+
+    model_name = req.model or _default_model
+    if not model_name:
+        models_list = _discover_models()
+        model_name = models_list[-1] if models_list else "chat_vi"
+
+    event_q: _queue.Queue = _queue.Queue()
+    _SENTINEL = object()
+
+    def _on_step(step):
+        event_q.put({"type": "step", "step": step_to_dict(step)})
+
+    def _worker():
+        try:
+            result = run_agent(
+                task=req.task,
+                model=model_name,
+                server_url=f"http://127.0.0.1:{_server_port}",
+                tools=req.tools,
+                system_prompt=req.system_prompt,
+                max_steps=req.max_steps,
+                temperature=req.temperature,
+                max_tokens=req.max_tokens,
+                mode=req.mode,
+                skill=req.skill,
+                use_memory=req.use_memory,
+                on_step=_on_step,
+            )
+            event_q.put({
+                "type": "done",
+                "answer": result.answer,
+                "model": result.model,
+                "elapsed": result.elapsed,
+                "success": result.success,
+                "error": result.error,
+                "steps": [step_to_dict(s) for s in result.steps],
+            })
+        except Exception as e:
+            event_q.put({"type": "error", "error": str(e)})
+        finally:
+            event_q.put(_SENTINEL)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+    async def _stream():
+        final_response = None
+        while True:
+            try:
+                ev = event_q.get_nowait()
+            except _queue.Empty:
+                await asyncio.sleep(0.05)
+                continue
+            if ev is _SENTINEL:
+                break
+            if ev.get("type") == "done":
+                final_response = ev
+            yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+            await asyncio.sleep(0)
+        yield "data: [DONE]\n\n"
+
+        # Lưu phiên sau khi xong
+        if req.session_id and final_response:
+            try:
+                from sessions import SessionStore
+                store = SessionStore()
+                store.append_message(req.session_id, "user", req.task)
+                store.save_agent_run(req.session_id, final_response)
+            except Exception:
+                pass
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
 # ─── Skills, Memory & Sessions endpoints ──────────────────────────────────────
 
 @app.get("/v1/skills")

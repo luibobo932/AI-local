@@ -59,6 +59,7 @@ class AgentConfig:
     system_prompt: str = ""
     mode: str = "auto"  # "auto" | "react" | "function_calling"
     timeout: float = 60.0
+    on_step: Optional[object] = None  # callback(AgentStep) gọi sau mỗi bước (cho streaming)
 
 
 # ─── Kết quả ──────────────────────────────────────────────────────────────────
@@ -185,6 +186,17 @@ def _chat_request(
     return resp.json()
 
 
+# ─── Streaming callback helper ────────────────────────────────────────────────
+
+def _emit(cfg: AgentConfig, step: "AgentStep"):
+    """Gọi callback on_step (nếu có) sau mỗi bước — phục vụ streaming."""
+    if cfg.on_step:
+        try:
+            cfg.on_step(step)
+        except Exception:
+            pass
+
+
 # ─── Function Calling mode ────────────────────────────────────────────────────
 
 def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
@@ -223,6 +235,7 @@ def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
             step.thought = msg.get("content", "")
             step.is_final = True
             steps.append(step)
+            _emit(cfg, step)
             messages.append({"role": "assistant", "content": msg.get("content", "")})
             return AgentResult(
                 answer=msg.get("content", ""),
@@ -255,6 +268,7 @@ def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
             })
 
         steps.append(step)
+        _emit(cfg, step)
 
     # Hết max_steps — lấy câu trả lời cuối cùng
     try:
@@ -316,6 +330,7 @@ def _run_react(task: str, cfg: AgentConfig) -> AgentResult:
             answer = text.split("Final Answer:", 1)[1].strip()
             step.is_final = True
             steps.append(step)
+            _emit(cfg, step)
             return AgentResult(
                 answer=answer, steps=steps, model=cfg.model,
                 elapsed=time.time() - t0
@@ -354,6 +369,7 @@ def _run_react(task: str, cfg: AgentConfig) -> AgentResult:
                 # Lần đầu không có action = trả lời thẳng
                 step.is_final = True
                 steps.append(step)
+                _emit(cfg, step)
                 return AgentResult(
                     answer=text, steps=steps, model=cfg.model,
                     elapsed=time.time() - t0
@@ -361,6 +377,7 @@ def _run_react(task: str, cfg: AgentConfig) -> AgentResult:
             messages.append({"role": "user", "content": "Đưa ra Final Answer nếu đã hoàn thành."})
 
         steps.append(step)
+        _emit(cfg, step)
 
     return AgentResult(
         answer=full_trace, steps=steps, model=cfg.model,
@@ -472,6 +489,7 @@ def run_agent(
     project_root: str = ".",
     skill: str = "",
     use_memory: bool = True,
+    on_step=None,
 ) -> AgentResult:
     """
     Chạy agent để hoàn thành nhiệm vụ.
@@ -524,6 +542,7 @@ def run_agent(
         system_prompt=system_prompt,
         mode=mode,
         timeout=timeout,
+        on_step=on_step,
     )
 
     # Auto-detect mode: thử function_calling trước
@@ -544,6 +563,24 @@ def run_agent(
         return _run_function_calling(task, cfg)
     else:
         return _run_react(task, cfg)
+
+
+def step_to_dict(step: "AgentStep", result_limit: int = 2000) -> dict:
+    """Serialize một AgentStep thành dict (cho JSON/SSE)."""
+    return {
+        "step": step.step,
+        "thought": step.thought,
+        "is_final": step.is_final,
+        "tool_calls": [
+            {
+                "id": tc.id,
+                "name": tc.name,
+                "arguments": tc.arguments,
+                "result": tc.result[:result_limit],
+            }
+            for tc in step.tool_calls
+        ],
+    }
 
 
 def format_result(result: AgentResult, verbose: bool = False) -> str:

@@ -852,7 +852,23 @@ function renderAgentResult(bubble, result) {
       stepsEl.appendChild(stepEl);
     });
 
+    // Khi đang stream: tự mở bước mới nhất để thấy agent đang làm gì
+    if (result.streaming) {
+      const lastBody = stepsEl.lastChild && stepsEl.lastChild.querySelector('.agent-step-body');
+      if (lastBody) lastBody.classList.add('open');
+    }
+
     bubble.appendChild(stepsEl);
+  }
+
+  // Đang stream và chưa có câu trả lời → hiện chỉ báo đang chạy
+  if (result.streaming && !result.answer) {
+    const running = document.createElement('div');
+    running.className = 'agent-meta';
+    running.textContent = `⏳ Đang làm... (${steps.length} bước)`;
+    bubble.appendChild(running);
+    scrollChatToBottom();
+    return;
   }
 
   const answerLabel = document.createElement('div');
@@ -889,11 +905,12 @@ async function send(overrideText = null) {
   bot.classList.add('typing');
   let answer = '';
 
-  // ── Agent mode ──────────────────────────────────────────────────────────────
+  // ── Agent mode (streaming) ───────────────────────────────────────────────────
   if (agentEnabled.checked) {
     bot.textContent = '🤖 Agent đang chạy...';
+    const liveSteps = [];
     try {
-      const resp = await fetch('/v1/agent', {
+      const resp = await fetch('/v1/agent/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -905,14 +922,38 @@ async function send(overrideText = null) {
           mode: 'auto',
         })
       });
-      if (!resp.ok) throw new Error('Server trả lỗi ' + resp.status);
-      const result = await resp.json();
+      if (!resp.ok || !resp.body) throw new Error('Server trả lỗi ' + resp.status);
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let done = false;
       bot.classList.remove('typing');
-      if (result.success === false) {
-        bot.textContent = '❌ Lỗi agent: ' + (result.error || 'Unknown error');
-      } else {
-        renderAgentResult(bot, result);
-        answer = result.answer || '';
+
+      while (!done) {
+        const { done: rdone, value } = await reader.read();
+        if (rdone) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const payload = trimmed.slice(5).trim();
+          if (payload === '[DONE]') { done = true; break; }
+          let ev;
+          try { ev = JSON.parse(payload); } catch { continue; }
+
+          if (ev.type === 'step') {
+            liveSteps.push(ev.step);
+            renderAgentResult(bot, { steps: liveSteps, answer: '', model: modelSel.value, elapsed: 0, streaming: true });
+          } else if (ev.type === 'done') {
+            renderAgentResult(bot, ev);
+            answer = ev.answer || '';
+          } else if (ev.type === 'error') {
+            bot.textContent = '❌ Lỗi agent: ' + (ev.error || '');
+          }
+        }
       }
     } catch (error) {
       bot.classList.remove('typing');

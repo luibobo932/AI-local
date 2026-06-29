@@ -47,7 +47,7 @@ Hoặc bật toggle **🤖 Agent** ngay trên giao diện web. Agent tự độn
 - Chọn & gọi tools theo vòng lặp (đọc/ghi file, chạy shell, search web, git, MCP...)
 - Tự **ghi nhớ** điều học được cho phiên sau (`remember` tool)
 
-**API:** `POST /v1/agent` · `GET /v1/tools` · `GET /v1/skills` · `GET /v1/memory` · `GET /v1/sessions` · `GET /v1/repomap` · `GET/POST /v1/mcp/servers`
+**API:** `POST /v1/agent` · `POST /v1/agent/stream` (SSE, hiện từng bước live) · `GET /v1/tools` · `GET /v1/skills` · `GET /v1/memory` · `GET /v1/sessions` · `GET /v1/repomap` · `GET/POST /v1/mcp/servers`
 
 > 💡 Agent mạnh nhất với model HF lớn (Llama, Mistral...) ở chế độ `function_calling`.
 > Model tiếng Việt nhỏ `chat_vi` chạy chế độ `react` — phù hợp demo, kết quả hạn chế.
