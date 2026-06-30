@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import time
 import unicodedata
 import urllib.parse
+import urllib.request
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -48,6 +50,13 @@ def _looks_like_computer_command(plain: str) -> bool:
     ):
         return True
     if re.match(r"^(?:hay\s+)?(?:minion\s+)?doi\s+[0-9]{1,2}\b", plain):
+        return True
+    # Ý định mở chung: "mở <bất kỳ>", "khởi động <app>", "bật <app> lên"...
+    if re.match(
+        r"^(?:(?:hay|ban|minion|oi|lam on|vui long|giup|gium|dum)\s+)*"
+        r"(?:mo|khoi dong|khoi chay|truy cap)\s+\S+",
+        plain,
+    ):
         return True
 
     keywords = [
@@ -1115,6 +1124,144 @@ def _run_shell_command(command: str, plain: str) -> ComputerUseResult | None:
     )
 
 
+# App hệ thống mở bằng exe (qua App Paths của Windows nên Office/Chrome cũng chạy).
+_SYSTEM_APPS = {
+    "notepad": "notepad.exe", "ghi chu": "notepad.exe",
+    "may tinh": "calc.exe", "calculator": "calc.exe", "calc": "calc.exe",
+    "explorer": "explorer.exe", "file explorer": "explorer.exe", "this pc": "explorer.exe",
+    "cmd": "cmd.exe", "command prompt": "cmd.exe", "powershell": "powershell.exe",
+    "paint": "mspaint.exe", "wordpad": "write.exe",
+    "task manager": "taskmgr.exe", "quan ly tac vu": "taskmgr.exe",
+    "control panel": "control.exe", "bang dieu khien": "control.exe",
+    "settings": "ms-settings:", "cai dat": "ms-settings:",
+    "chrome": "chrome.exe", "edge": "msedge.exe", "firefox": "firefox.exe",
+    "cốc cốc": "coccoc.exe", "coc coc": "coccoc.exe",
+    "word": "winword.exe", "excel": "excel.exe", "powerpoint": "powerpnt.exe",
+    "outlook": "outlook.exe", "onenote": "onenote.exe",
+    "zalo": "Zalo.exe", "telegram": "Telegram.exe", "discord": "Discord.exe",
+    "spotify": "Spotify.exe",
+}
+# Dịch vụ có bản web — luôn mở được dù chưa cài app.
+_WEB_APPS = {
+    "facebook": "https://www.facebook.com", "fb": "https://www.facebook.com",
+    "messenger": "https://www.messenger.com",
+    "telegram web": "https://web.telegram.org",
+    "zalo web": "https://chat.zalo.me",
+    "discord web": "https://discord.com/app",
+    "spotify web": "https://open.spotify.com",
+    "tiktok": "https://www.tiktok.com",
+    "instagram": "https://www.instagram.com",
+    "twitter": "https://twitter.com", "x": "https://twitter.com",
+    "threads": "https://www.threads.net",
+    "youtube": "https://www.youtube.com",
+    "gmail": "https://mail.google.com", "mail": "https://mail.google.com",
+    "google": "https://www.google.com",
+    "maps": "https://maps.google.com", "ban do": "https://maps.google.com",
+    "google maps": "https://maps.google.com",
+    "drive": "https://drive.google.com", "google drive": "https://drive.google.com",
+    "calendar": "https://calendar.google.com", "lich": "https://calendar.google.com",
+    "chatgpt": "https://chat.openai.com", "claude": "https://claude.ai",
+    "gemini": "https://gemini.google.com",
+    "shopee": "https://shopee.vn", "lazada": "https://www.lazada.vn", "tiki": "https://tiki.vn",
+    "github": "https://github.com", "linkedin": "https://www.linkedin.com",
+    "netflix": "https://www.netflix.com", "reddit": "https://www.reddit.com",
+    "twitch": "https://www.twitch.tv", "notion": "https://www.notion.so",
+}
+
+
+# App có cả bản desktop lẫn web: nếu chưa cài app thì mở web cho chắc.
+_DESKTOP_WEB_FALLBACK = {
+    "telegram": "https://web.telegram.org",
+    "zalo": "https://chat.zalo.me",
+    "discord": "https://discord.com/app",
+    "spotify": "https://open.spotify.com",
+}
+
+
+def _resolve_exe(exe: str) -> str | None:
+    """Trả về đường dẫn exe nếu app thực sự cài (PATH hoặc registry App Paths), None nếu không."""
+    if exe.endswith(":") or exe.startswith("ms-"):
+        return exe  # URI dạng ms-settings: luôn dùng được
+    found = shutil.which(exe)
+    if found:
+        return found
+    try:
+        import winreg  # chỉ có trên Windows
+        sub = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\\" + exe
+        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(root, sub) as key:
+                    val, _ = winreg.QueryValueEx(key, None)
+                    if val and os.path.exists(val):
+                        return val
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def _launch_system_app(key: str, exe: str) -> ComputerUseResult | None:
+    resolved = _resolve_exe(exe)
+    if resolved is None:
+        return None  # chưa cài -> để caller thử bản web
+    if resolved.endswith(":") or resolved.startswith("ms-"):
+        os.startfile(resolved)
+    else:
+        subprocess.Popen([resolved], shell=False)
+    return ComputerUseResult(True, True, f"Đã mở {key}.", "open_app", {"app": key})
+
+
+def _grams(plain: str) -> set[str]:
+    tokens = plain.split()
+    grams = set(tokens)
+    for i in range(len(tokens) - 1):
+        grams.add(tokens[i] + " " + tokens[i + 1])
+    return grams
+
+
+def _open_named_app(plain: str) -> ComputerUseResult | None:
+    """Mở app/web theo tên xuất hiện trong câu (so khớp theo từ, ưu tiên cụm dài)."""
+    grams = _grams(plain)
+    for key in sorted(_SYSTEM_APPS, key=len, reverse=True):
+        if key in grams:
+            try:
+                result = _launch_system_app(key, _SYSTEM_APPS[key])
+            except Exception:
+                result = None
+            if result is not None:
+                return result
+            fallback = _DESKTOP_WEB_FALLBACK.get(key)
+            if fallback:
+                webbrowser.open(fallback)
+                return ComputerUseResult(True, True, f"Chưa cài app {key}, đã mở bản web: {fallback}", "open_url", {"url": fallback})
+            break  # thử khớp bản web bên dưới
+    for key in sorted(_WEB_APPS, key=len, reverse=True):
+        if key in grams:
+            url = _WEB_APPS[key]
+            webbrowser.open(url)
+            return ComputerUseResult(True, True, f"Đã mở {key}: {url}", "open_url", {"url": url})
+    return None
+
+
+_OPEN_TRAIL = {
+    "len", "toi", "minh", "gium", "dum", "giup", "nhe", "nha", "a", "di",
+    "luon", "ngay", "cho", "ban", "oi", "voi", "gio", "ho", "dum",
+}
+_OPEN_LEAD = {"app", "ung", "dung", "ung dung", "phan mem", "trang", "web", "trang web", "giup", "cai", "cho"}
+
+
+def _extract_open_target_name(command: str, plain: str) -> str:
+    match = re.search(r"\b(?:mo|khoi dong|khoi chay|chay|truy cap|vao)\b\s+(.+)$", plain)
+    text = match.group(1) if match else plain
+    toks = text.split()
+    while toks and toks[0] in _OPEN_LEAD:
+        toks.pop(0)
+    while toks and toks[-1] in _OPEN_TRAIL:
+        toks.pop()
+    return " ".join(toks).strip()
+
+
 def _open_target(command: str, plain: str) -> ComputerUseResult:
     path_result = _open_file_or_folder(command)
     if path_result is not None:
@@ -1140,37 +1287,117 @@ def _open_target(command: str, plain: str) -> ComputerUseResult:
         webbrowser.open(url)
         return ComputerUseResult(True, True, f"Đã tìm YouTube: {query}", "search", {"query": query, "url": url})
 
-    app_map = {
-        "notepad": "notepad.exe",
-        "ghi chu": "notepad.exe",
-        "may tinh": "calc.exe",
-        "calculator": "calc.exe",
-        "calc": "calc.exe",
-        "explorer": "explorer.exe",
-        "file explorer": "explorer.exe",
-        "chrome": "chrome.exe",
-        "edge": "msedge.exe",
-        "cmd": "cmd.exe",
-        "powershell": "powershell.exe",
-    }
-    for key, exe in app_map.items():
-        if key in plain:
-            subprocess.Popen([exe], shell=False)
-            return ComputerUseResult(True, True, f"Đã mở {key}.", "open_app")
+    named = _open_named_app(plain)
+    if named is not None:
+        return named
 
-    site_map = {
-        "google": "https://www.google.com",
-        "youtube": "https://www.youtube.com",
-        "zalo": "https://chat.zalo.me",
-        "gmail": "https://mail.google.com",
-        "calendar": "https://calendar.google.com",
-    }
-    for key, url in site_map.items():
-        if key in plain:
+    # Không khớp tên quen -> thử suy ra mục tiêu từ câu.
+    target = _extract_open_target_name(command, plain)
+    if target:
+        # Trông như tên miền (vd "tuoitre.vn") -> mở thẳng web.
+        if re.match(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$", target):
+            url = target if target.startswith("http") else "https://" + target
             webbrowser.open(url)
-            return ComputerUseResult(True, True, f"Đã mở {key}: {url}", "open_url")
+            return ComputerUseResult(True, True, f"Đã mở: {url}", "open_url", {"url": url})
+        # Thử mở như một app đã cài (qua App Paths / protocol của Windows).
+        try:
+            subprocess.Popen(f'start "" "{target}"', shell=True)
+            return ComputerUseResult(True, True, f"Đã thử mở: {target}", "open_app", {"app": target})
+        except Exception:
+            pass
+        # Cuối cùng: tìm Google cho từ khoá đó.
+        url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(target)
+        webbrowser.open(url)
+        return ComputerUseResult(True, True, f"Không thấy app \"{target}\", đã tìm Google giúp anh.", "search", {"query": target, "url": url})
 
-    return ComputerUseResult(True, False, "Anh muốn mở app/link nào? Ví dụ: `mở notepad`, `mở https://google.com`.", "open")
+    return ComputerUseResult(True, False, "Anh muốn mở app/link nào? Ví dụ: `mở notepad`, `mở facebook`, `mở https://google.com`.", "open")
+
+
+# Từ đệm cắt ở ĐẦU câu (đã bỏ dấu). Chỉ cắt ở đầu/cuối, không cắt giữa tên bài.
+# Bộ rộng: dùng khi không có chữ 'youtube' (vd 'bật bài X'), cắt cả động từ mở/bật/nghe.
+_YT_LEAD_BROAD = {
+    "ban", "minion", "oi", "hay", "lam", "on", "vui", "long", "giup", "gium", "dum",
+    "mo", "bat", "phat", "nghe", "play", "choi", "cho", "toi", "minh", "muon",
+    "video", "clip", "nhac", "bai", "hat", "ca", "khuc", "ten", "mv",
+}
+# Bộ hẹp: dùng sau chữ 'youtube', chỉ bỏ các từ chắc chắn không phải tên bài.
+_YT_LEAD_NARROW = {"video", "clip", "nhac", "bai", "hat", "ca", "khuc", "ten", "mv"}
+# Từ đệm cắt ở CUỐI câu. Không gồm anh/em/minh để khỏi cắt nhầm tên bài (vd 'Cho Anh').
+_YT_TRAIL = {
+    "cho", "toi", "nhe", "nha", "a", "di", "voi", "luon", "ngay", "gio",
+    "hay", "bat", "mo", "phat", "play", "len", "choi", "gium", "dum", "giup",
+    "roi", "duoc", "oi", "va", "gium", "dum",
+}
+
+
+def _extract_youtube_query(command: str) -> str:
+    """Lấy tên bài hát / từ khoá từ câu kiểu 'bạn mở youtube bài X của Y cho tôi nhé'."""
+    words = command.split()
+    start = 0
+    has_yt = False
+    for i, w in enumerate(words):
+        if "youtube" in _plain_text(w):
+            start = i + 1
+            has_yt = True
+            break
+    rest = [w.strip(".,!?") for w in words[start:] if w.strip(".,!?")]
+    lead = _YT_LEAD_NARROW if has_yt else _YT_LEAD_BROAD
+    while rest and _plain_text(rest[0]) in lead:
+        rest.pop(0)
+    # Cắt từ đệm ở cuối: lặp giữa từ đơn và cụm 'cho + đại từ' (cho tôi/cho mình...).
+    pronouns = {"toi", "minh", "em", "ban", "chung toi", "chung minh"}
+    changed = True
+    while changed and rest:
+        changed = False
+        while rest and _plain_text(rest[-1]) in _YT_TRAIL:
+            rest.pop()
+            changed = True
+        if len(rest) >= 2 and _plain_text(rest[-1]) in pronouns and _plain_text(rest[-2]) == "cho":
+            rest.pop()
+            rest.pop()
+            changed = True
+    return " ".join(rest).strip()
+
+
+def _youtube_first_video_id(query: str) -> str | None:
+    """Lấy videoId của kết quả đầu tiên trên YouTube (không cần API key)."""
+    url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept-Language": "vi,en;q=0.9",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        html = resp.read().decode("utf-8", "replace")
+    match = re.search(r'"videoId":"([A-Za-z0-9_-]{11})"', html)
+    return match.group(1) if match else None
+
+
+def _open_youtube(query: str, autoplay: bool) -> ComputerUseResult:
+    query = (query or "").strip()
+    if not query:
+        webbrowser.open("https://www.youtube.com")
+        return ComputerUseResult(True, True, "Đã mở YouTube.", "open_url", {"url": "https://www.youtube.com"})
+
+    if autoplay:
+        try:
+            video_id = _youtube_first_video_id(query)
+        except Exception:
+            video_id = None
+        if video_id:
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            webbrowser.open(url)
+            return ComputerUseResult(
+                True, True, f"Đã mở YouTube và bật: {query}", "open_url",
+                {"query": query, "url": url, "video_id": video_id},
+            )
+
+    url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
+    webbrowser.open(url)
+    note = " (chưa tự phát được, anh bấm video đầu tiên nhé)" if autoplay else ""
+    return ComputerUseResult(True, True, f"Đã tìm YouTube: {query}{note}", "search", {"query": query, "url": url})
 
 
 def _screenshot() -> ComputerUseResult:
@@ -1350,6 +1577,16 @@ def execute_computer_command(command: str, enabled: bool, _depth: int = 0) -> Co
             time.sleep(seconds)
             return ComputerUseResult(True, True, f"Đã đợi {seconds} giây.", "wait", {"seconds": seconds})
 
+        if "youtube" in plain or any(k in plain for k in (
+            "nghe nhac", "mo nhac", "bat nhac", "phat nhac",
+            "bat bai", "phat bai", "nghe bai", "mo bai hat",
+        )):
+            autoplay = any(k in plain for k in (
+                "bat", "phat", "nghe", "play", "choi", "len luon", "mo len",
+            ))
+            query = _extract_youtube_query(command)
+            return _open_youtube(query, autoplay)
+
         shell_result = _run_shell_command(command, plain)
         if shell_result is not None:
             return shell_result
@@ -1470,7 +1707,11 @@ def execute_computer_command(command: str, enabled: bool, _depth: int = 0) -> Co
         if "chup man hinh" in plain or "xem man hinh" in plain:
             return _screenshot()
 
-        if re.match(r"^(?:hay\s+)?(?:minion\s+)?mo\b", plain) or "mo link" in plain or "mo trang" in plain:
+        if re.match(
+            r"^(?:(?:hay|ban|minion|oi|lam on|vui long|giup|gium|dum)\s+)*"
+            r"(?:mo|khoi dong|khoi chay|truy cap)\b",
+            plain,
+        ) or "mo link" in plain or "mo trang" in plain:
             return _open_target(command, plain)
 
         coords = re.findall(r"(-?\d{1,5})\D+(-?\d{1,5})", plain)
