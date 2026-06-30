@@ -1,0 +1,15 @@
+{
+  "name": "Minion — Gợi ý nhà cho khách",
+  "short_name": "Minion",
+  "description": "Trợ lý gợi ý nhà phố TP.HCM theo nhu cầu khách và soạn lời chào bán.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#eef2f6",
+  "theme_color": "#f5c542",
+  "lang": "vi",
+  "icons": [
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

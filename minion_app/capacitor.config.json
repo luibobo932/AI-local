@@ -1,0 +1,7 @@
+{
+  "appId": "com.minion.batdongsan",
+  "appName": "Minion",
+  "webDir": ".",
+  "bundledWebRuntime": false,
+  "server": { "androidScheme": "https" }
+}
