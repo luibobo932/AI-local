@@ -185,6 +185,39 @@ class LLMClient:
         except urllib.error.URLError as e:
             raise LLMError(f"Không kết nối được {url}: {getattr(e, 'reason', e)}") from e
 
+    def embed(self, inputs, model: str = "") -> list:
+        """
+        Tạo embedding cho text qua endpoint OpenAI-compatible (POST /embeddings).
+        - inputs: str hoặc list[str]
+        - model: tên model embedding (vd 'nomic-embed-text'); mặc định lấy
+          LLM_EMBED_MODEL từ env, nếu không có thì dùng self.model.
+        Trả về list[list[float]] theo thứ tự input. Raise LLMError nếu lỗi.
+        """
+        single = isinstance(inputs, str)
+        items = [inputs] if single else list(inputs)
+        emb_model = model or os.environ.get("LLM_EMBED_MODEL", "") or self.model
+        payload = {"model": emb_model, "input": items}
+        url = f"{self.base_url}/embeddings"
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=self._headers(), method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                body = json.loads(resp.read().decode("utf-8", errors="replace"))
+            vecs = [d["embedding"] for d in body.get("data", [])]
+            if not vecs:
+                raise LLMError(f"Không nhận được embedding từ {url}")
+            return vecs[0] if single else vecs
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")[:400]
+            raise LLMError(
+                f"HTTP {e.code} từ {url}: {detail}. "
+                f"Cần model embedding (vd: ollama pull nomic-embed-text) và đặt LLM_EMBED_MODEL."
+            ) from e
+        except urllib.error.URLError as e:
+            raise LLMError(f"Không kết nối được {url}: {getattr(e, 'reason', e)}") from e
+        except (KeyError, json.JSONDecodeError) as e:
+            raise LLMError(f"Phản hồi embedding không hợp lệ từ {url}: {e}") from e
+
     def list_models(self) -> list:
         """Liệt kê model có sẵn (GET /models). Trả về list tên."""
         url = f"{self.base_url}/models"

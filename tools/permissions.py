@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 # Tool chỉ đọc — luôn an toàn
 READ_ONLY = frozenset({
-    "read_file", "list_dir", "search_files", "glob", "repo_map",
+    "read_file", "list_dir", "search_files", "glob", "repo_map", "rag_search",
     "recall", "todo_read", "list_skills",
     "git_status", "git_diff", "git_log",
     "web_fetch", "web_search",
