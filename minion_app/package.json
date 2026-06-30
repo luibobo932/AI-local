@@ -1,0 +1,14 @@
+{
+  "name": "minion-app",
+  "version": "1.0.0",
+  "description": "Minion — trợ lý gợi ý nhà phố TP.HCM (PWA + APK qua Capacitor)",
+  "scripts": {
+    "serve": "python3 -m http.server 8080",
+    "test": "node tests/engine.test.js",
+    "cap:init": "npx cap init Minion com.minion.batdongsan --web-dir .",
+    "cap:add": "npm i @capacitor/core @capacitor/cli @capacitor/android && npx cap add android",
+    "cap:sync": "npx cap sync android",
+    "apk": "cd android && ./gradlew assembleDebug"
+  },
+  "license": "MIT"
+}

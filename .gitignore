@@ -15,3 +15,8 @@ output/
 .ai-local/
 # Cấu hình local — KHÔNG commit (chứa key/secret). Dùng .env.example làm mẫu.
 .env
+
+# Minion app (Capacitor) build artifacts
+minion_app/node_modules/
+minion_app/android/
+minion_app/.gradle/

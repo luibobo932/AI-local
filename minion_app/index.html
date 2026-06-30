@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#f5c542">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icon.svg">
+<link rel="apple-touch-icon" href="assets/icon.svg">
+<title>Minion — Gợi ý nhà cho khách</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="appbar">
+    <img src="assets/icon.svg" alt="Minion" class="logo">
+    <div>
+      <h1>Minion</h1>
+      <p>Trợ lý gợi ý nhà phố TP.HCM</p>
+    </div>
+    <span class="count" id="count">0 căn</span>
+  </header>
+
+  <main>
+    <section class="need-card">
+      <label for="need">Nhu cầu của khách</label>
+      <textarea id="need" rows="3" placeholder="VD: Khách cần nhà Quận 7 tầm 5 tỷ, 3 phòng ngủ để ở cho gia đình..."></textarea>
+      <div class="examples" id="examples"></div>
+      <button id="go" class="primary">🔍 Gợi ý nhà phù hợp</button>
+    </section>
+
+    <section id="parsed" class="parsed hidden"></section>
+    <section id="results" class="results"></section>
+  </main>
+
+  <nav class="tabbar">
+    <button class="tab active" data-view="match">🎯 Gợi ý</button>
+    <button class="tab" data-view="list">🏠 Kho nhà</button>
+    <button class="tab" data-view="data">⚙️ Dữ liệu</button>
+  </nav>
+
+  <!-- View: kho nhà -->
+  <section id="view-list" class="sheet hidden"></section>
+  <!-- View: dữ liệu -->
+  <section id="view-data" class="sheet hidden">
+    <h2>Dữ liệu nhà</h2>
+    <p class="muted">Dán JSON danh sách nhà (xuất từ Landsoft/Excel) để thay dữ liệu mẫu. Lưu trên máy, không gửi đi đâu.</p>
+    <textarea id="dataInput" rows="8" placeholder='[{"district":"Quận 7","street":"...","price":5200,"area":60,...}]'></textarea>
+    <div class="row-btns">
+      <button id="loadData" class="primary">Nạp dữ liệu</button>
+      <button id="resetData" class="ghost">Khôi phục mẫu</button>
+    </div>
+    <p class="muted" id="dataStatus"></p>
+  </section>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="data.js"></script>
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>
