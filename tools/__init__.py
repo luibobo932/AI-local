@@ -43,6 +43,24 @@ def _list_skills() -> str:
     return list_skills_tool()
 
 
+def _rag_search(query: str, k: int = 5) -> str:
+    """Tìm đoạn code liên quan bằng RAG ngữ nghĩa (embeddings)."""
+    try:
+        from rag import retrieve, format_context, load_index
+    except Exception as e:
+        return f"[ERROR] Không nạp được module rag: {e}"
+    if not load_index().get("items"):
+        return ("[RAG chưa có index] Hãy chạy: python rag.py index "
+                "(cần model embedding, vd: ollama pull nomic-embed-text rồi đặt LLM_EMBED_MODEL).")
+    try:
+        hits = retrieve(query, k=k)
+    except Exception as e:
+        return f"[ERROR] RAG truy vấn lỗi: {e}"
+    if not hits:
+        return "Không tìm thấy đoạn code liên quan."
+    return format_context(hits)
+
+
 # Registry: name → callable
 TOOL_REGISTRY: dict[str, callable] = {
     "read_file":    read_file,
@@ -61,6 +79,7 @@ TOOL_REGISTRY: dict[str, callable] = {
     "remember":     _remember,
     "recall":       _recall,
     "list_skills":  _list_skills,
+    "rag_search":   _rag_search,
     "glob":         glob_files,
     "multi_edit":   multi_edit,
     "apply_patch":  apply_patch,
@@ -307,6 +326,21 @@ TOOL_SCHEMAS: list[dict] = [
             "name": "list_skills",
             "description": "Liệt kê các skill (workflow đóng gói) có sẵn để áp dụng cho nhiệm vụ.",
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rag_search",
+            "description": "Tìm đoạn code liên quan trong dự án bằng tìm kiếm NGỮ NGHĨA (embeddings/RAG). Dùng khi cần hiểu code liên quan đến một khái niệm/chức năng mà không biết chính xác tên file/hàm. Khác search_files (chỉ khớp text), tool này hiểu ý nghĩa.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Mô tả điều cần tìm, vd: 'xử lý đăng nhập và tạo token'"},
+                    "k": {"type": "integer", "description": "Số đoạn trả về (mặc định 5)"},
+                },
+                "required": ["query"],
+            },
         },
     },
     {
