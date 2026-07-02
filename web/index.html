@@ -79,6 +79,32 @@
   }
   .status-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #334155; }
   .pulse { width: 9px; height: 9px; border-radius: 50%; background: #28b463; box-shadow: 0 0 0 5px rgba(40,180,99,.14); }
+  .status-kv {
+    margin-top: 10px;
+    display: grid;
+    gap: 6px;
+    font-size: 12px;
+    color: #42526a;
+  }
+  .status-kv div {
+    display: grid;
+    grid-template-columns: 78px 1fr;
+    gap: 8px;
+  }
+  .status-kv strong { color: #1f2630; font-weight: 700; }
+
+  .tool-title { color: #dbeafe; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+  .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tool-btn {
+    min-height: 38px;
+    border: 1px solid rgba(255,255,255,.2);
+    background: rgba(255,255,255,.13);
+    color: #fff;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .tool-btn:hover { background: rgba(255,255,255,.22); }
 
   .quick-title { margin-top: auto; color: #dbeafe; font-size: 12px; font-weight: 700; text-transform: uppercase; }
   .chips { display: grid; gap: 9px; }
@@ -120,6 +146,17 @@
   .title-group h2 { font-size: 17px; line-height: 1.1; }
   .title-group p { font-size: 12px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .toolbar { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .stop-btn {
+    height: 38px;
+    border: 1px solid #c94a4a;
+    background: #fff1f1;
+    color: #9b1c1c;
+    border-radius: 8px;
+    padding: 0 11px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .stop-btn:disabled { opacity: .45; cursor: not-allowed; }
   .cu-toggle {
     height: 38px;
     display: inline-flex;
@@ -265,6 +302,58 @@
     white-space: normal;
   }
   .computer-step strong { color: var(--denim-2); }
+  .computer-result-block {
+    max-height: 320px;
+    overflow: auto;
+    margin-top: 10px;
+    border: 1px solid rgba(31,38,48,.12);
+    border-radius: 8px;
+    background: rgba(255,255,255,.6);
+    padding: 10px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+  }
+  .approval-card {
+    border: 1px solid #d99a20;
+    background: #fff7d6;
+    border-radius: 8px;
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .approval-card button {
+    width: fit-content;
+    border: 0;
+    border-radius: 8px;
+    background: var(--denim);
+    color: #fff;
+    padding: 8px 11px;
+    cursor: pointer;
+  }
+  .status-drawer {
+    border-bottom: 1px solid rgba(31,38,48,.12);
+    background: rgba(255,250,240,.96);
+    padding: 12px 18px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    font-size: 12px;
+  }
+  .status-drawer[hidden] { display: none; }
+  .drawer-item {
+    min-width: 0;
+    color: var(--muted);
+  }
+  .drawer-item strong {
+    display: block;
+    color: var(--ink);
+    margin-bottom: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .ui-tree-list {
     display: grid;
     gap: 6px;
@@ -323,6 +412,7 @@
     .toolbar { width: 100%; margin-left: 0; }
     .cu-toggle { flex: 1 1 100%; justify-content: center; }
     select { flex: 1; min-width: 0; }
+    .status-drawer { grid-template-columns: 1fr; padding: 10px 12px; }
     #chat { padding: 14px 12px; }
     .bubble { max-width: calc(100vw - 70px); font-size: 14.5px; }
     footer { padding: 12px; }
@@ -344,7 +434,15 @@
 
       <div class="status-card">
         <div class="status-line"><span class="pulse"></span><span>Đang chạy trên máy của anh</span></div>
+        <div class="status-kv" id="sideStatus">
+          <div><strong>Quyền</strong><span>Hỏi khi rủi ro</span></div>
+          <div><strong>Cửa sổ</strong><span id="sideActiveWindow">Đang đọc...</span></div>
+          <div><strong>Chuột</strong><span id="sideCursor">-</span></div>
+        </div>
       </div>
+
+      <div class="tool-title">Công cụ</div>
+      <div class="tool-grid" id="toolButtons"></div>
 
       <div class="quick-title">Câu hỏi nhanh</div>
       <div class="chips" id="chips"></div>
@@ -358,6 +456,8 @@
           <p>Hỏi nhanh về nhà phố, lọc căn theo quận, giá, ngang, diện tích.</p>
         </div>
         <div class="toolbar">
+          <button class="ghost-btn" id="statusBtn" type="button">Trạng thái</button>
+          <button class="stop-btn" id="stopAgent" type="button" disabled>Dừng</button>
           <label class="cu-toggle" id="computerUseToggle">
             <input id="computerUseEnabled" type="checkbox">
             <span>Điều khiển máy</span>
@@ -366,6 +466,13 @@
           <button class="ghost-btn" id="clear" type="button">Xóa chat</button>
         </div>
       </header>
+
+      <div class="status-drawer" id="statusDrawer" hidden>
+        <div class="drawer-item"><strong id="drawerServer">Server</strong><span>Đang kiểm tra</span></div>
+        <div class="drawer-item"><strong id="drawerModel">Model</strong><span>minion</span></div>
+        <div class="drawer-item"><strong id="drawerWindow">Cửa sổ</strong><span>-</span></div>
+        <div class="drawer-item"><strong id="drawerAgent">Agent</strong><span>Chưa chạy</span></div>
+      </div>
 
       <div id="chat">
         <div class="welcome" id="welcome">
@@ -411,8 +518,19 @@ const modelSel = document.getElementById('model');
 const welcome = document.getElementById('welcome');
 const computerUseToggle = document.getElementById('computerUseToggle');
 const computerUseEnabled = document.getElementById('computerUseEnabled');
+const statusBtn = document.getElementById('statusBtn');
+const stopAgentBtn = document.getElementById('stopAgent');
+const statusDrawer = document.getElementById('statusDrawer');
+const sideActiveWindow = document.getElementById('sideActiveWindow');
+const sideCursor = document.getElementById('sideCursor');
+const drawerServer = document.getElementById('drawerServer');
+const drawerModel = document.getElementById('drawerModel');
+const drawerWindow = document.getElementById('drawerWindow');
+const drawerAgent = document.getElementById('drawerAgent');
 let history = [];
 let busy = false;
+let currentAgentRunId = null;
+let lastError = '';
 
 const MINION_SYSTEM_PROMPT = [
   "Bạn là Minion, trợ lý AI local do Duy phát triển.",
@@ -429,6 +547,15 @@ const samples = [
   "Tóm tắt căn phù hợp để gọi khách"
 ];
 
+const toolCommands = [
+  { label: 'Màn hình', command: 'xem màn hình' },
+  { label: 'UI tree', command: 'xem UI' },
+  { label: 'Cửa sổ', command: 'danh sách cửa sổ' },
+  { label: 'Workspace', command: 'workspace status' },
+  { label: 'Tìm code', command: 'tìm code "TODO"' },
+  { label: 'Agent mẫu', command: 'agent: xem màn hình rồi danh sách cửa sổ' }
+];
+
 const chips = document.getElementById('chips');
 samples.forEach((sample) => {
   const chip = document.createElement('button');
@@ -440,6 +567,21 @@ samples.forEach((sample) => {
     send();
   };
   chips.appendChild(chip);
+});
+
+const toolButtons = document.getElementById('toolButtons');
+toolCommands.forEach((item) => {
+  const btn = document.createElement('button');
+  btn.className = 'tool-btn';
+  btn.type = 'button';
+  btn.textContent = item.label;
+  btn.onclick = () => {
+    computerUseEnabled.checked = true;
+    computerUseToggle.classList.add('active');
+    input.value = item.command;
+    send();
+  };
+  toolButtons.appendChild(btn);
 });
 
 // Nạp danh sách model từ server local và ưu tiên alias Minion.
@@ -465,6 +607,8 @@ fetch('/api/tags').then(r => r.json()).then((data) => {
   modelSel.appendChild(option);
 });
 
+modelSel.addEventListener('change', () => updateStatus());
+
 input.addEventListener('input', () => {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 150) + 'px';
@@ -483,7 +627,25 @@ computerUseEnabled.checked = false;
 computerUseToggle.classList.toggle('active', computerUseEnabled.checked);
 computerUseEnabled.addEventListener('change', () => {
   computerUseToggle.classList.toggle('active', computerUseEnabled.checked);
+  updateStatus();
 });
+
+statusBtn.onclick = () => {
+  statusDrawer.hidden = !statusDrawer.hidden;
+  updateStatus();
+};
+
+stopAgentBtn.onclick = async () => {
+  if (!currentAgentRunId) return;
+  try {
+    await fetch(`/api/agent/runs/${currentAgentRunId}/stop`, { method: 'POST' });
+    stopAgentBtn.disabled = true;
+    updateStatus('Đang dừng');
+  } catch (error) {
+    lastError = String(error);
+    updateStatus();
+  }
+};
 
 document.getElementById('clear').onclick = () => {
   history = [];
@@ -491,6 +653,32 @@ document.getElementById('clear').onclick = () => {
   welcome.style.display = '';
   input.focus();
 };
+
+async function updateStatus(agentLabel = null) {
+  drawerModel.nextElementSibling.textContent = modelSel.value || 'minion';
+  drawerAgent.nextElementSibling.textContent = agentLabel || (currentAgentRunId ? currentAgentRunId.slice(0, 8) : 'Chưa chạy');
+  try {
+    const [healthResp, stateResp] = await Promise.all([
+      fetch('/api/health'),
+      fetch('/api/computer-use/state')
+    ]);
+    const health = await healthResp.json();
+    const state = await stateResp.json();
+    drawerServer.nextElementSibling.textContent = health.status === 'ok' ? 'OK' : 'Không rõ';
+    const active = state.active_window || '-';
+    const cursor = state.cursor ? `${state.cursor.x}, ${state.cursor.y}` : '-';
+    sideActiveWindow.textContent = active;
+    sideCursor.textContent = cursor;
+    drawerWindow.nextElementSibling.textContent = active;
+  } catch (error) {
+    lastError = String(error);
+    drawerServer.nextElementSibling.textContent = 'Lỗi kết nối';
+    drawerWindow.nextElementSibling.textContent = lastError;
+  }
+}
+
+setInterval(updateStatus, 8000);
+updateStatus();
 
 function addBubble(role, text) {
   if (welcome) welcome.style.display = 'none';
@@ -579,6 +767,53 @@ function renderComputerPayload(bubble, payload, stickToBottom = isChatNearBottom
   const panel = document.createElement('div');
   panel.className = 'computer-panel';
 
+  if (payload.type === 'approval_request') {
+    const card = document.createElement('div');
+    card.className = 'approval-card';
+    const reason = document.createElement('div');
+    reason.textContent = `Cần xác nhận: ${payload.reason || payload.action || 'thao tác rủi ro'}`;
+    const risk = document.createElement('div');
+    risk.textContent = `Mức quyền: ${payload.risk_level || 'needs_approval'}`;
+    const approve = document.createElement('button');
+    approve.type = 'button';
+    approve.textContent = 'Cho phép một lần';
+    approve.onclick = async () => {
+      approve.disabled = true;
+      await runApprovedCommand(payload.command, payload.approval_id);
+    };
+    card.appendChild(reason);
+    card.appendChild(risk);
+    card.appendChild(approve);
+    panel.appendChild(card);
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
+  if (payload.type === 'workspace_diff') {
+    const meta = document.createElement('div');
+    meta.className = 'computer-meta';
+    meta.textContent = `${payload.path || 'file'} - ${payload.count || 0} chỗ thay đổi`;
+    const block = document.createElement('pre');
+    block.className = 'computer-result-block';
+    block.textContent = payload.diff || '(không có diff)';
+    panel.appendChild(meta);
+    panel.appendChild(block);
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
+  if (payload.type === 'workspace_run' || payload.type === 'workspace') {
+    const block = document.createElement('pre');
+    block.className = 'computer-result-block';
+    block.textContent = payload.output || payload.diff || JSON.stringify(payload, null, 2);
+    panel.appendChild(block);
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
   if (payload.type === 'agent_run' && Array.isArray(payload.steps)) {
     const steps = document.createElement('div');
     steps.className = 'computer-steps';
@@ -587,6 +822,18 @@ function renderComputerPayload(bubble, payload, stickToBottom = isChatNearBottom
       item.className = 'computer-step';
       const status = step.ok ? 'OK' : 'Lỗi';
       item.innerHTML = `<strong>Bước ${step.index} - ${status}:</strong> ${escapeHtml(step.instruction || '')}<br>${escapeHtml(step.message || '')}`;
+      if (step.needs_approval && step.data?.type === 'approval_request') {
+        const approve = document.createElement('button');
+        approve.className = 'action-btn';
+        approve.type = 'button';
+        approve.textContent = 'Cho phép bước này';
+        approve.onclick = async () => {
+          approve.disabled = true;
+          await runApprovedCommand(step.data.command, step.data.approval_id);
+        };
+        item.appendChild(document.createElement('br'));
+        item.appendChild(approve);
+      }
       steps.appendChild(item);
     });
     panel.appendChild(steps);
@@ -693,6 +940,80 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function appendComputerResult(result) {
+  const text = result?.message || 'Không có phản hồi từ Minion.';
+  const bubble = addBubble('bot', text);
+  if (result?.data) renderComputerPayload(bubble, result.data);
+  return bubble;
+}
+
+async function runApprovedCommand(command, approvalId) {
+  try {
+    const resp = await fetch('/api/computer-use/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        command,
+        enabled: true,
+        approval_token: approvalId
+      })
+    });
+    const result = await resp.json();
+    appendComputerResult(result);
+  } catch (error) {
+    appendComputerResult({ ok: false, message: `Không chạy được lệnh đã duyệt: ${error}` });
+  }
+}
+
+function looksLikeAgentTask(text) {
+  const plain = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replaceAll('đ', 'd');
+  return /^(minion\s+)?(tu\s+lam|auto\s+lam|agent|cowork)\b/.test(plain);
+}
+
+async function sendAgentTask(text, bot) {
+  currentAgentRunId = null;
+  stopAgentBtn.disabled = false;
+  updateStatus('Đang chạy');
+  const startResp = await fetch('/api/agent/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      task: text,
+      enabled: computerUseEnabled.checked,
+      max_steps: 8
+    })
+  });
+  if (!startResp.ok) throw new Error('Agent API trả lỗi ' + startResp.status);
+  let run = await startResp.json();
+  currentAgentRunId = run.id;
+  bot.textContent = `Agent run ${run.id.slice(0, 8)} đang chạy...`;
+
+  while (['queued', 'running', 'paused'].includes(run.status)) {
+    await new Promise(resolve => setTimeout(resolve, 700));
+    const pollResp = await fetch(`/api/agent/runs/${run.id}`);
+    run = await pollResp.json();
+    const lines = [
+      `Agent run ${run.id.slice(0, 8)}: ${run.status}`,
+      ...(run.steps || []).map(step => `${step.index}. ${step.instruction} -> ${step.message}`)
+    ];
+    bot.textContent = lines.join('\n');
+    scrollChatToBottom();
+  }
+
+  stopAgentBtn.disabled = true;
+  currentAgentRunId = null;
+  updateStatus(run.status);
+  bot.textContent = run.message || `Agent run ${run.status}`;
+  renderComputerPayload(bot, {
+    type: 'agent_run',
+    status: run.status,
+    ok: run.ok,
+    steps: run.steps || [],
+    screenshot: run.screenshot
+  });
+  return run;
+}
+
 async function send(overrideText = null) {
   const text = (overrideText ?? input.value).trim();
   if (!text || busy) return;
@@ -711,6 +1032,17 @@ async function send(overrideText = null) {
   let answer = '';
 
   try {
+    if (computerUseEnabled.checked && looksLikeAgentTask(text)) {
+      bot.classList.remove('typing');
+      const run = await sendAgentTask(text, bot);
+      answer = run.message || `Agent run ${run.status}`;
+      if (answer.trim()) history.push({ role: 'assistant', content: answer });
+      busy = false;
+      sendBtn.disabled = false;
+      input.focus();
+      return;
+    }
+
     const isSmallVi = modelSel.value === 'chat_vi';
     const resp = await fetch('/api/chat', {
       method: 'POST',

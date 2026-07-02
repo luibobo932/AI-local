@@ -171,3 +171,41 @@ cli.py               Command line interface
 ## 📜 License
 
 MIT — dùng tự do cho học tập và dự án cá nhân.
+
+---
+
+## Minion Desktop Cowork
+
+Chạy app local:
+
+```bash
+python server.py --port 11435
+```
+
+Mở UI: `http://localhost:11435`
+
+Minion hiện có các phần chính:
+
+- Chat tiếng Việt với persona rõ: Minion là trợ lý local do Duy phát triển.
+- Computer-use local: chụp màn hình, đọc UI tree, click/gõ/cuộn chuột, focus cửa sổ, resize/minimize/maximize, mở app/link.
+- Agent nhiều bước: `POST /api/agent/run`, xem trạng thái tại `/api/agent/runs/{id}`, có stop/pause/resume.
+- Workspace/code agent API: status, list files, search, read, diff/patch exact replace, run command trong workspace.
+- Quyền an toàn mặc định: `ask_when_risky`. Shell command, sửa file, ghi clipboard, đóng cửa sổ phải xác nhận một lần; lệnh nguy hiểm như `git reset --hard`, `rm -rf`, `Remove-Item -Recurse` bị chặn.
+- Cấu hình nằm ở `minion.config.json`.
+
+Endpoint mới:
+
+```text
+POST /api/computer-use/command
+POST /api/agent/run
+GET  /api/agent/runs/{id}
+POST /api/agent/runs/{id}/stop
+POST /api/agent/runs/{id}/pause
+POST /api/agent/runs/{id}/resume
+GET  /api/workspace/status
+POST /api/workspace/files
+POST /api/workspace/search
+POST /api/workspace/read
+POST /api/workspace/patch
+POST /api/workspace/run
+```

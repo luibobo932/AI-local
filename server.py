@@ -33,6 +33,7 @@ import pickle
 import re
 import time
 import unicodedata
+import uuid
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
@@ -43,7 +44,18 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
 
-from computer_use import execute_computer_command, get_computer_state
+from computer_use import (
+    execute_computer_command,
+    get_computer_state,
+    plan_agent_steps,
+    screenshot_result,
+    workspace_list_files_result,
+    workspace_patch_result,
+    workspace_read_result,
+    workspace_run_command_result,
+    workspace_search_result,
+    workspace_status_result,
+)
 from model.gpt import GPT, GPTConfig
 from model.hf_backend import HFModel, is_hf_model
 
@@ -72,6 +84,7 @@ _ollama_aliases = {
 }
 _house_all_limit = 5000
 _house_action_marker = "[[MINION_ACTIONS:"
+_agent_runs: dict[str, dict] = {}
 
 
 def _read_env_file(path: str) -> dict[str, str]:
@@ -1414,6 +1427,39 @@ class CreateRequest(BaseModel):
 class ComputerCommandRequest(BaseModel):
     command: str = ""
     enabled: bool = True
+    approval_token: str = ""
+
+
+class AgentRunRequest(BaseModel):
+    task: str = ""
+    enabled: bool = True
+    max_steps: int = 8
+    approval_token: str = ""
+
+
+class WorkspaceFilesRequest(BaseModel):
+    query: str = ""
+
+
+class WorkspaceSearchRequest(BaseModel):
+    pattern: str = ""
+
+
+class WorkspaceReadRequest(BaseModel):
+    path: str = ""
+
+
+class WorkspacePatchRequest(BaseModel):
+    path: str = ""
+    old: str = ""
+    new: str = ""
+    apply: bool = False
+    approval_token: str = ""
+
+
+class WorkspaceRunRequest(BaseModel):
+    command: str = ""
+    approval_token: str = ""
 
 
 # ─── Ollama-compatible endpoints ──────────────────────────────────────────────
@@ -1502,6 +1548,55 @@ async def _status_stream(messages: list[str]) -> AsyncIterator[str]:
     for msg in messages:
         yield json.dumps({"status": msg}) + "\n"
         await asyncio.sleep(0)
+
+
+def _computer_result_payload(result) -> dict:
+    if result is None:
+        return {
+            "handled": False,
+            "ok": False,
+            "message": "Không nhận diện đây là lệnh điều khiển máy.",
+            "action": "unhandled",
+            "risk_level": "safe",
+            "needs_approval": False,
+            "approval_id": "",
+            "artifacts": [],
+            "data": {},
+        }
+
+    data = result.data or {}
+    artifacts = list(getattr(result, "artifacts", []) or [])
+    if isinstance(data, dict) and data.get("type") == "screenshot":
+        artifacts.append(data)
+    if isinstance(data, dict) and data.get("type") == "agent_run":
+        shot = data.get("screenshot")
+        if isinstance(shot, dict):
+            artifacts.append(shot)
+        for step in data.get("steps") or []:
+            step_shot = step.get("screenshot") if isinstance(step, dict) else None
+            if isinstance(step_shot, dict):
+                artifacts.append(step_shot)
+
+    seen = set()
+    unique_artifacts = []
+    for artifact in artifacts:
+        key = json.dumps(artifact, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_artifacts.append(artifact)
+
+    return {
+        "handled": result.handled,
+        "ok": result.ok,
+        "message": result.message,
+        "action": result.action,
+        "risk_level": getattr(result, "risk_level", "safe"),
+        "needs_approval": bool(getattr(result, "needs_approval", False)),
+        "approval_id": getattr(result, "approval_id", ""),
+        "artifacts": unique_artifacts,
+        "data": data,
+    }
 
 
 @app.post("/api/create")
@@ -2037,22 +2132,194 @@ async def api_computer_use_state():
 @app.post("/api/computer-use/command")
 async def api_computer_use_command(req: ComputerCommandRequest):
     """Chạy một lệnh computer-use trực tiếp, phục vụ desktop UI/tooling local."""
-    result = execute_computer_command(req.command, req.enabled)
-    if result is None:
-        return {
-            "handled": False,
+    result = execute_computer_command(req.command, req.enabled, approval_token=req.approval_token or None)
+    return _computer_result_payload(result)
+
+
+async def _agent_run_worker(run_id: str, req: AgentRunRequest) -> None:
+    record = _agent_runs[run_id]
+    record["status"] = "running"
+    record["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+
+    if not req.enabled:
+        record.update({
+            "status": "failed",
             "ok": False,
-            "message": "Không nhận diện đây là lệnh điều khiển máy.",
-            "action": "unhandled",
-            "data": {},
-        }
-    return {
-        "handled": result.handled,
-        "ok": result.ok,
-        "message": result.message,
-        "action": result.action,
-        "data": result.data,
+            "message": "Computer Use đang tắt. Anh bật nút `Điều khiển máy` rồi chạy lại task.",
+            "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+        })
+        return
+
+    try:
+        steps = plan_agent_steps(req.task, req.max_steps)
+        record["plan"] = steps
+        record["observation"] = get_computer_state()
+        if not steps:
+            record.update({
+                "status": "failed",
+                "ok": False,
+                "message": "Thiếu task cần làm.",
+                "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+            })
+            return
+
+        ok = True
+        for index, step in enumerate(steps, start=1):
+            while record.get("status") == "paused":
+                await asyncio.sleep(0.2)
+            if record.get("stop_requested"):
+                record["status"] = "stopped"
+                record["message"] = "Đã dừng theo yêu cầu."
+                break
+
+            result = await asyncio.to_thread(
+                execute_computer_command,
+                step,
+                True,
+                1,
+                req.approval_token or None,
+            )
+            payload = _computer_result_payload(result)
+            step_shot = await asyncio.to_thread(screenshot_result)
+            shot_payload = _computer_result_payload(step_shot)
+            screenshot = shot_payload.get("data") if shot_payload.get("ok") else None
+            record["steps"].append({
+                "index": index,
+                "instruction": step,
+                "ok": payload["ok"],
+                "action": payload["action"],
+                "risk_level": payload["risk_level"],
+                "needs_approval": payload["needs_approval"],
+                "approval_id": payload["approval_id"],
+                "message": payload["message"],
+                "data": payload["data"],
+                "screenshot": screenshot,
+            })
+            record["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+            ok = ok and bool(payload["ok"])
+            if payload["needs_approval"]:
+                record["status"] = "needs_approval"
+                record["ok"] = False
+                record["message"] = payload["message"]
+                break
+            if payload["risk_level"] == "blocked":
+                record["status"] = "blocked"
+                record["ok"] = False
+                record["message"] = payload["message"]
+                break
+
+        if record.get("status") in {"running", "paused"}:
+            final_shot = await asyncio.to_thread(screenshot_result)
+            final_payload = _computer_result_payload(final_shot)
+            record["screenshot"] = final_payload.get("data") if final_payload.get("ok") else None
+            record["status"] = "completed" if ok else "failed"
+            record["ok"] = ok
+            record["message"] = "Minion đã chạy xong task." if ok else "Minion đã chạy task nhưng có bước lỗi."
+        record["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+    except Exception as exc:
+        record.update({
+            "status": "failed",
+            "ok": False,
+            "message": f"Lỗi agent run: {exc}",
+            "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+        })
+
+
+@app.post("/api/agent/run")
+async def api_agent_run(req: AgentRunRequest):
+    """Chạy một task computer-use nhiều bước ở nền để UI có thể poll/stop."""
+    run_id = uuid.uuid4().hex
+    now = datetime.now(tz=timezone.utc).isoformat()
+    _agent_runs[run_id] = {
+        "id": run_id,
+        "task": req.task,
+        "status": "queued",
+        "ok": None,
+        "message": "",
+        "plan": [],
+        "steps": [],
+        "observation": {},
+        "screenshot": None,
+        "stop_requested": False,
+        "created_at": now,
+        "updated_at": now,
     }
+    asyncio.create_task(_agent_run_worker(run_id, req))
+    return _agent_runs[run_id]
+
+
+@app.get("/api/agent/runs/{run_id}")
+async def api_agent_run_status(run_id: str):
+    record = _agent_runs.get(run_id)
+    if not record:
+        raise HTTPException(404, "Agent run not found.")
+    return record
+
+
+@app.post("/api/agent/runs/{run_id}/stop")
+async def api_agent_run_stop(run_id: str):
+    record = _agent_runs.get(run_id)
+    if not record:
+        raise HTTPException(404, "Agent run not found.")
+    record["stop_requested"] = True
+    if record.get("status") == "paused":
+        record["status"] = "stopped"
+    record["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+    return record
+
+
+@app.post("/api/agent/runs/{run_id}/pause")
+async def api_agent_run_pause(run_id: str):
+    record = _agent_runs.get(run_id)
+    if not record:
+        raise HTTPException(404, "Agent run not found.")
+    if record.get("status") == "running":
+        record["status"] = "paused"
+        record["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+    return record
+
+
+@app.post("/api/agent/runs/{run_id}/resume")
+async def api_agent_run_resume(run_id: str):
+    record = _agent_runs.get(run_id)
+    if not record:
+        raise HTTPException(404, "Agent run not found.")
+    if record.get("status") == "paused":
+        record["status"] = "running"
+        record["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+    return record
+
+
+@app.get("/api/workspace/status")
+async def api_workspace_status():
+    return _computer_result_payload(workspace_status_result())
+
+
+@app.post("/api/workspace/files")
+async def api_workspace_files(req: WorkspaceFilesRequest):
+    return _computer_result_payload(workspace_list_files_result(req.query))
+
+
+@app.post("/api/workspace/search")
+async def api_workspace_search(req: WorkspaceSearchRequest):
+    return _computer_result_payload(workspace_search_result(req.pattern))
+
+
+@app.post("/api/workspace/read")
+async def api_workspace_read(req: WorkspaceReadRequest):
+    return _computer_result_payload(workspace_read_result(req.path))
+
+
+@app.post("/api/workspace/patch")
+async def api_workspace_patch(req: WorkspacePatchRequest):
+    return _computer_result_payload(
+        workspace_patch_result(req.path, req.old, req.new, req.apply, req.approval_token or None)
+    )
+
+
+@app.post("/api/workspace/run")
+async def api_workspace_run(req: WorkspaceRunRequest):
+    return _computer_result_payload(workspace_run_command_result(req.command, req.approval_token or None))
 
 
 @app.get("/api/computer-use/files/{filename}")
@@ -2091,7 +2358,7 @@ if __name__ == "__main__":
 
     ui_host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host
     print(f"AI-local server starting on http://{args.host}:{args.port}")
-    print(f"\n  💬 Mở giao diện chat tại:  http://{ui_host}:{args.port}\n")
+    print(f"\n  Mo giao dien chat tai:  http://{ui_host}:{args.port}\n")
     print(f"Checkpoints dir: {args.checkpoints_dir}")
     models = _discover_models()
     if models:

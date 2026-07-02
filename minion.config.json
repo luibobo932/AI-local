@@ -1,0 +1,10 @@
+{
+  "permission_mode": "ask_when_risky",
+  "max_agent_steps": 8,
+  "command_timeout_seconds": 20,
+  "allowed_workspace_roots": [
+    "."
+  ],
+  "default_model": "minion",
+  "screenshot_dir": "output/computer-use"
+}
