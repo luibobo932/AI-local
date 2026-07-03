@@ -376,7 +376,7 @@
     border-top: 1px solid rgba(31, 38, 48, .12);
     padding: 15px 18px 17px;
   }
-  .inputbar { display: grid; grid-template-columns: 1fr 48px; gap: 10px; align-items: end; }
+  .inputbar { display: grid; grid-template-columns: 1fr 48px 48px; gap: 10px; align-items: end; }
   textarea {
     width: 100%;
     max-height: 150px;
@@ -402,6 +402,19 @@
   }
   #send:hover { background: var(--denim-2); }
   #send:disabled { opacity: .45; cursor: not-allowed; }
+  #stopChat {
+    width: 48px;
+    height: 48px;
+    border: 1px solid #d58a8a;
+    border-radius: 10px;
+    background: #fff1f1;
+    color: #9b1c1c;
+    cursor: pointer;
+    font-size: 18px;
+    font-weight: 700;
+  }
+  #stopChat:hover { background: #ffe1e1; }
+  #stopChat:disabled { opacity: .42; cursor: not-allowed; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; text-align: center; }
 
   @media (max-width: 820px) {
@@ -487,6 +500,7 @@
       <footer>
         <div class="inputbar">
           <textarea id="input" rows="1" placeholder="Nhập tin nhắn... Enter để gửi, Shift+Enter để xuống dòng"></textarea>
+          <button id="stopChat" type="button" aria-label="Ngưng chat" disabled>■</button>
           <button id="send" type="button" aria-label="Gửi">➤</button>
         </div>
         <div class="hint">Logo là mascot gốc màu vàng đeo kính, không sao chép nhân vật/logo Minions có bản quyền.</div>
@@ -514,6 +528,7 @@
 const chat = document.getElementById('chat');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
+const stopChatBtn = document.getElementById('stopChat');
 const modelSel = document.getElementById('model');
 const welcome = document.getElementById('welcome');
 const computerUseToggle = document.getElementById('computerUseToggle');
@@ -530,13 +545,15 @@ const drawerAgent = document.getElementById('drawerAgent');
 let history = [];
 let busy = false;
 let currentAgentRunId = null;
+let currentChatController = null;
+let stopRequested = false;
 let lastError = '';
 
 const MINION_SYSTEM_PROMPT = [
   "Bạn là Minion, trợ lý AI local do Duy phát triển.",
   "Luôn nhận mình tên là Minion. Khi được hỏi ai tạo ra hoặc phát triển bạn, trả lời là Duy.",
   "Bạn hỗ trợ công việc nhà phố TP.HCM: tìm căn, lọc dữ liệu, tóm tắt thông tin để gọi khách.",
-  "Trả lời tiếng Việt ngắn gọn, thực dụng, không bịa thông tin."
+  "Trả lời tiếng Việt có dấu đầy đủ, ngắn gọn, thực dụng, không bịa thông tin."
 ].join(" ");
 
 const samples = [
@@ -552,6 +569,7 @@ const toolCommands = [
   { label: 'UI tree', command: 'xem UI' },
   { label: 'Cửa sổ', command: 'danh sách cửa sổ' },
   { label: 'Workspace', command: 'workspace status' },
+  { label: 'Kiểm tra', command: 'kiểm tra dự án' },
   { label: 'Tìm code', command: 'tìm code "TODO"' },
   { label: 'Agent mẫu', command: 'agent: xem màn hình rồi danh sách cửa sổ' }
 ];
@@ -622,6 +640,18 @@ input.addEventListener('keydown', (event) => {
 });
 
 sendBtn.onclick = () => send();
+stopChatBtn.onclick = async () => {
+  stopRequested = true;
+  stopChatBtn.disabled = true;
+  if (currentChatController) currentChatController.abort();
+  if (currentAgentRunId) {
+    try {
+      await fetch(`/api/agent/runs/${currentAgentRunId}/stop`, { method: 'POST' });
+    } catch {
+      // Stop UI vẫn phải phản hồi ngay cả khi agent endpoint lỗi.
+    }
+  }
+};
 
 computerUseEnabled.checked = false;
 computerUseToggle.classList.toggle('active', computerUseEnabled.checked);
@@ -804,6 +834,35 @@ function renderComputerPayload(bubble, payload, stickToBottom = isChatNearBottom
     return;
   }
 
+  if (payload.type === 'workspace_diagnostics' && Array.isArray(payload.checks)) {
+    const summary = document.createElement('div');
+    summary.className = 'computer-meta';
+    const counts = payload.summary || {};
+    summary.textContent = `Diagnostics: ${counts.passed || 0}/${counts.total || payload.checks.length} OK - ${payload.root || ''}`;
+    panel.appendChild(summary);
+
+    payload.checks.forEach((check) => {
+      const item = document.createElement('div');
+      item.className = 'computer-step';
+      const status = check.ok ? 'OK' : 'Lỗi';
+      const title = document.createElement('strong');
+      title.textContent = `${status}: ${check.name || 'check'}`;
+      const command = document.createElement('div');
+      command.className = 'computer-meta';
+      command.textContent = check.command || '';
+      const block = document.createElement('pre');
+      block.className = 'computer-result-block';
+      block.textContent = check.output || '(không có output)';
+      item.appendChild(title);
+      item.appendChild(command);
+      item.appendChild(block);
+      panel.appendChild(item);
+    });
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
   if (payload.type === 'workspace_run' || payload.type === 'workspace') {
     const block = document.createElement('pre');
     block.className = 'computer-result-block';
@@ -981,7 +1040,8 @@ async function sendAgentTask(text, bot) {
       task: text,
       enabled: computerUseEnabled.checked,
       max_steps: 8
-    })
+    }),
+    signal: currentChatController?.signal
   });
   if (!startResp.ok) throw new Error('Agent API trả lỗi ' + startResp.status);
   let run = await startResp.json();
@@ -989,8 +1049,9 @@ async function sendAgentTask(text, bot) {
   bot.textContent = `Agent run ${run.id.slice(0, 8)} đang chạy...`;
 
   while (['queued', 'running', 'paused'].includes(run.status)) {
+    if (stopRequested) break;
     await new Promise(resolve => setTimeout(resolve, 700));
-    const pollResp = await fetch(`/api/agent/runs/${run.id}`);
+    const pollResp = await fetch(`/api/agent/runs/${run.id}`, { signal: currentChatController?.signal });
     run = await pollResp.json();
     const lines = [
       `Agent run ${run.id.slice(0, 8)}: ${run.status}`,
@@ -1019,7 +1080,10 @@ async function send(overrideText = null) {
   if (!text || busy) return;
 
   busy = true;
+  stopRequested = false;
+  currentChatController = new AbortController();
   sendBtn.disabled = true;
+  stopChatBtn.disabled = false;
   addBubble('user', text);
   if (overrideText === null) {
     input.value = '';
@@ -1039,6 +1103,9 @@ async function send(overrideText = null) {
       if (answer.trim()) history.push({ role: 'assistant', content: answer });
       busy = false;
       sendBtn.disabled = false;
+      stopChatBtn.disabled = true;
+      currentChatController = null;
+      stopRequested = false;
       input.focus();
       return;
     }
@@ -1060,7 +1127,8 @@ async function send(overrideText = null) {
               num_predict: 300,
               computer_use_enabled: computerUseEnabled.checked
             }
-      })
+      }),
+      signal: currentChatController.signal
     });
 
     if (!resp.ok || !resp.body) throw new Error('Server trả lỗi ' + resp.status);
@@ -1091,7 +1159,11 @@ async function send(overrideText = null) {
       }
     }
   } catch (error) {
-    answer = 'Lỗi kết nối tới server local. Anh chạy file start_minion_chat.bat hoặc lệnh `python server.py --port 11435` rồi mở lại giao diện.';
+    if (error.name === 'AbortError' || stopRequested) {
+      answer = (answer.trim() ? answer + '\n\n' : '') + 'Đã ngưng chat.';
+    } else {
+      answer = 'Lỗi kết nối tới server local. Anh chạy file start_minion_chat.bat hoặc lệnh `python server.py --port 11435` rồi mở lại giao diện.';
+    }
     bot.textContent = answer;
   }
 
@@ -1112,6 +1184,9 @@ async function send(overrideText = null) {
   if (answer.trim()) history.push({ role: 'assistant', content: answer });
   busy = false;
   sendBtn.disabled = false;
+  stopChatBtn.disabled = true;
+  currentChatController = null;
+  stopRequested = false;
   input.focus();
 }
 </script>

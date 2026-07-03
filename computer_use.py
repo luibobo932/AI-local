@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 import subprocess
 import time
 import unicodedata
 import urllib.parse
+import urllib.request
+import html
 import difflib
 import hashlib
 import json
@@ -276,6 +279,20 @@ def _looks_like_computer_command(plain: str) -> bool:
         "scroll",
         "keo chuot",
         "drag",
+        "am luong",
+        "volume",
+        "tang am",
+        "giam am",
+        "mo am",
+        "bat am",
+        "kiem tra du an",
+        "kiem tra loi",
+        "kiem tra minion",
+        "review du an",
+        "diagnostics",
+        "codex check",
+        "chay test du an",
+        "test du an",
         "chay lenh",
         "workspace",
         "trang thai workspace",
@@ -1036,6 +1053,11 @@ _VK = {
     "xuong": 0x28,
     "trai": 0x25,
     "phai": 0x27,
+    "volumeup": 0xAF,
+    "volumedown": 0xAE,
+    "volumemute": 0xAD,
+    "tangamluong": 0xAF,
+    "giamamluong": 0xAE,
 }
 for i in range(1, 13):
     _VK[f"f{i}"] = 0x6F + i
@@ -1070,6 +1092,48 @@ def _press_hotkey(keys: list[str]) -> None:
     for vk in reversed(parsed):
         user32.keybd_event(vk, 0, 0x0002, 0)
         time.sleep(0.03)
+
+
+def _tap_virtual_key(vk: int, count: int = 1, delay: float = 0.015) -> None:
+    if os.name != "nt":
+        raise RuntimeError("Computer-use hiện chỉ hỗ trợ Windows.")
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    for _ in range(max(1, count)):
+        user32.keybd_event(vk, 0, 0, 0)
+        time.sleep(delay)
+        user32.keybd_event(vk, 0, 0x0002, 0)
+        time.sleep(delay)
+
+
+def _set_volume_result(command: str, plain: str) -> ComputerUseResult | None:
+    if "am luong" not in plain and "volume" not in plain and "tieng" not in plain:
+        return None
+
+    if "toi da" in plain or "max" in plain or "100" in plain or "lon nhat" in plain:
+        _tap_virtual_key(_VK["volumeup"], count=50)
+        return ComputerUseResult(
+            True,
+            True,
+            "Đã tăng âm lượng máy tính lên tối đa.",
+            "volume_max",
+            {"type": "volume", "level": "max"},
+        )
+
+    if "tang" in plain or "mo lon" in plain or "to hon" in plain or "up" in plain:
+        _tap_virtual_key(_VK["volumeup"], count=8)
+        return ComputerUseResult(True, True, "Đã tăng âm lượng máy tính.", "volume_up", {"type": "volume"})
+
+    if "giam" in plain or "nho" in plain or "down" in plain:
+        _tap_virtual_key(_VK["volumedown"], count=8)
+        return ComputerUseResult(True, True, "Đã giảm âm lượng máy tính.", "volume_down", {"type": "volume"})
+
+    if "tat" in plain or "mute" in plain:
+        _tap_virtual_key(_VK["volumemute"], count=1)
+        return ComputerUseResult(True, True, "Đã bật/tắt mute âm lượng máy tính.", "volume_mute", {"type": "volume"})
+
+    return None
 
 
 def _open_clipboard_with_retry(user32, attempts: int = 12) -> None:
@@ -1316,7 +1380,103 @@ def _workspace_status() -> ComputerUseResult:
         lines.append(_trim_output(status, 2000))
     except Exception as exc:
         lines.append(f"Không đọc được git status: {exc}")
-    return ComputerUseResult(True, True, "\n".join(lines), "workspace_status", {"type": "workspace", "root": str(root)})
+    message = "\n".join(lines)
+    return ComputerUseResult(True, True, message, "workspace_status", {"type": "workspace", "root": str(root), "output": message})
+
+
+def _run_diagnostic_command(name: str, args: list[str], timeout: int = 30) -> dict:
+    root = _workspace_root()
+    command_text = " ".join(args)
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+        output = "\n".join(part for part in [(completed.stdout or "").strip(), (completed.stderr or "").strip()] if part)
+        return {
+            "name": name,
+            "ok": completed.returncode == 0,
+            "command": command_text,
+            "returncode": completed.returncode,
+            "output": _trim_output(output or "(không có output)", 8000),
+        }
+    except subprocess.TimeoutExpired as exc:
+        partial = "\n".join(
+            part.decode("utf-8", errors="replace") if isinstance(part, bytes) else str(part)
+            for part in [exc.stdout, exc.stderr]
+            if part
+        ).strip()
+        return {
+            "name": name,
+            "ok": False,
+            "command": command_text,
+            "returncode": None,
+            "output": _trim_output(f"Quá thời gian {timeout} giây.\n{partial}".strip(), 8000),
+        }
+    except Exception as exc:
+        return {
+            "name": name,
+            "ok": False,
+            "command": command_text,
+            "returncode": None,
+            "output": f"Không chạy được check: {exc}",
+        }
+
+
+def _server_port_check_result(host: str = "127.0.0.1", port: int = 11435, timeout: float = 2.0) -> dict:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            output = f"Server local đang nhận kết nối tại http://{host}:{port}"
+            ok = True
+    except OSError as exc:
+        output = f"Chưa kết nối được server local tại http://{host}:{port}: {exc}"
+        ok = False
+    return {
+        "name": "server health",
+        "ok": ok,
+        "command": f"connect {host}:{port}",
+        "returncode": 0 if ok else None,
+        "output": output,
+    }
+
+
+def _workspace_diagnostics() -> ComputerUseResult:
+    checks = [
+        _run_diagnostic_command("git status", ["git", "status", "--short", "--branch", "--untracked-files=all"], timeout=10),
+        _run_diagnostic_command("python compile", ["python", "-m", "py_compile", "computer_use.py", "server.py"], timeout=25),
+        _run_diagnostic_command("unit tests", ["python", "-m", "unittest", "tests.test_minion_contracts"], timeout=60),
+        _server_port_check_result(),
+    ]
+    ok = all(check.get("ok") for check in checks)
+    passed = sum(1 for check in checks if check.get("ok"))
+    failed = len(checks) - passed
+    lines = [
+        f"Minion đã kiểm tra dự án: {passed}/{len(checks)} check OK.",
+    ]
+    if failed:
+        lines.append("Có lỗi cần xử lý trước khi xem là ổn định.")
+    else:
+        lines.append("Compile, test và server local đều ổn.")
+    for check in checks:
+        status = "OK" if check.get("ok") else "Lỗi"
+        lines.append(f"- {status}: {check.get('name')} ({check.get('command')})")
+    return ComputerUseResult(
+        True,
+        ok,
+        "\n".join(lines),
+        "workspace_diagnostics",
+        {
+            "type": "workspace_diagnostics",
+            "root": str(_workspace_root()),
+            "checks": checks,
+            "summary": {"total": len(checks), "passed": passed, "failed": failed},
+        },
+    )
 
 
 def _workspace_list_files(command: str, plain: str) -> ComputerUseResult:
@@ -1417,6 +1577,17 @@ def _workspace_replace_in_file(command: str, plain: str) -> ComputerUseResult:
 
 
 def _workspace_result(command: str, plain: str) -> ComputerUseResult | None:
+    if (
+        "kiem tra du an" in plain
+        or "kiem tra loi" in plain
+        or "kiem tra minion" in plain
+        or "review du an" in plain
+        or "diagnostics" in plain
+        or "codex check" in plain
+        or "chay test du an" in plain
+        or "test du an" in plain
+    ):
+        return _workspace_diagnostics()
     if "liet ke file" in plain or "list files" in plain or "tim file" in plain or "find file" in plain:
         return _workspace_list_files(command, plain)
     if "tim code" in plain or "search code" in plain:
@@ -1432,6 +1603,10 @@ def _workspace_result(command: str, plain: str) -> ComputerUseResult | None:
 
 def workspace_status_result() -> ComputerUseResult:
     return _workspace_status()
+
+
+def workspace_diagnostics_result() -> ComputerUseResult:
+    return _workspace_diagnostics()
 
 
 def workspace_list_files_result(query: str = "") -> ComputerUseResult:
@@ -1628,6 +1803,133 @@ def _run_shell_command(command: str, plain: str) -> ComputerUseResult | None:
     )
 
 
+def _strip_trailing_action_words(query: str) -> str:
+    query = re.sub(
+        r"\s+(?:và|va)\s+(?:bật|bat|phát|phat|play|mở|mo)\s+(?:lên|len|luôn|luon|ngay|bài|bai).*$",
+        "",
+        query,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    query = re.sub(
+        r"\s+(?:bật|bat|phát|phat|play)\s+(?:lên|len|luôn|luon|ngay)\s*$",
+        "",
+        query,
+        flags=re.IGNORECASE,
+    )
+    return query.strip(" .,!?:;-")
+
+
+def _extract_original_query(command: str, marker_pattern: str) -> str:
+    quoted = _extract_quoted_text(command)
+    if quoted:
+        return quoted.strip()
+    match = re.search(marker_pattern, command, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    query = match.group(1).strip()
+    return _strip_trailing_action_words(query)
+
+
+def _youtube_query(command: str) -> str:
+    query = _extract_original_query(
+        command,
+        r"(?:tìm\s+youtube|tim\s+youtube|mở\s+youtube|mo\s+youtube|youtube)\s*(?:bài|bai|video|nhạc|nhac)?\s+(.+)$",
+    )
+    if query:
+        return query
+    query = _extract_original_query(
+        command,
+        r"(?:mở|mo|bật|bat|phát|phat|play)\s+(?:bài|bai|nhạc|nhac|video)?\s*(.+?)\s+(?:trên|tren|ở|o)\s+youtube",
+    )
+    return query
+
+
+def _wants_youtube_autoplay(plain: str) -> bool:
+    if re.search(r"(?:mo|bat|phat)\s+youtube\s+(?:bai|nhac|video)\b", plain):
+        return True
+    return any(
+        phrase in plain
+        for phrase in [
+            "bat len",
+            "bat luon",
+            "phat",
+            "play",
+            "mo luon",
+            "mo bai",
+            "bat bai",
+        ]
+    )
+
+
+def _resolve_youtube_first_video_url(query: str) -> str | None:
+    if not query:
+        return None
+    search_url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
+    try:
+        request = urllib.request.Request(
+            search_url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
+                )
+            },
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            body = response.read(2_000_000).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    video_ids = re.findall(r'"videoId":"([A-Za-z0-9_-]{11})"', body)
+    if not video_ids:
+        video_ids = re.findall(r"/watch\?v=([A-Za-z0-9_-]{11})", html.unescape(body))
+    seen = set()
+    for video_id in video_ids:
+        if video_id in seen:
+            continue
+        seen.add(video_id)
+        return "https://www.youtube.com/watch?v=" + video_id
+    return None
+
+
+def _youtube_result(command: str, plain: str) -> ComputerUseResult | None:
+    if "youtube" not in plain:
+        return None
+    query = _youtube_query(command)
+    if not query:
+        webbrowser.open("https://www.youtube.com")
+        return ComputerUseResult(True, True, "Đã mở YouTube.", "open_url", {"url": "https://www.youtube.com"})
+
+    search_url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
+    if _wants_youtube_autoplay(plain):
+        video_url = _resolve_youtube_first_video_url(query)
+        if video_url:
+            webbrowser.open(video_url)
+            return ComputerUseResult(
+                True,
+                True,
+                f"Đã mở YouTube và phát: {query}",
+                "youtube_play",
+                {"type": "youtube", "query": query, "url": video_url},
+            )
+
+    webbrowser.open(search_url)
+    return ComputerUseResult(
+        True,
+        True,
+        f"Đã tìm YouTube: {query}",
+        "youtube_search",
+        {"type": "youtube", "query": query, "url": search_url},
+    )
+
+
+def _google_query(command: str) -> str:
+    return _extract_original_query(
+        command,
+        r"(?:tìm\s+kiếm|tim\s+kiem|tìm\s+google|tim\s+google|search|google)\s+(.+)$",
+    )
+
+
 def _open_target(command: str, plain: str) -> ComputerUseResult:
     path_result = _open_file_or_folder(command)
     if path_result is not None:
@@ -1639,19 +1941,15 @@ def _open_target(command: str, plain: str) -> ComputerUseResult:
         webbrowser.open(url)
         return ComputerUseResult(True, True, f"Đã mở link: {url}", "open_url")
 
-    search_match = re.search(r"(?:tim kiem|tim google|search|google)\s+(.+)$", plain)
-    if search_match and search_match.group(1).strip() not in {"google", "youtube"}:
-        query = search_match.group(1).strip()
+    youtube_result = _youtube_result(command, plain)
+    if youtube_result is not None:
+        return youtube_result
+
+    query = _google_query(command)
+    if query and _plain_text(query) not in {"google", "youtube"}:
         url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(query)
         webbrowser.open(url)
         return ComputerUseResult(True, True, f"Đã tìm Google: {query}", "search", {"query": query, "url": url})
-
-    youtube_match = re.search(r"(?:tim youtube|youtube)\s+(.+)$", plain)
-    if youtube_match and youtube_match.group(1).strip() != "youtube":
-        query = youtube_match.group(1).strip()
-        url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
-        webbrowser.open(url)
-        return ComputerUseResult(True, True, f"Đã tìm YouTube: {query}", "search", {"query": query, "url": url})
 
     app_map = {
         "notepad": "notepad.exe",
@@ -1737,9 +2035,16 @@ def get_computer_state() -> dict:
 
 def _split_sequence(command: str) -> list[str]:
     """Tách chuỗi thao tác đơn giản, tránh tách khi không có dấu hiệu nhiều bước."""
-    if not re.search(r"[;\n]|(\s+(rồi|roi|sau đó|sau do)\s+)", command, flags=re.IGNORECASE):
+    separator = (
+        r"[;\n]+"
+        r"|\s+(?:rồi|roi|sau đó|sau do)\s+"
+        r"|[.!?]\s+(?=(?:hãy\s+)?(?:minion\s+)?"
+        r"(?:mở|mo|bật|bat|phát|phat|tăng|tang|giảm|giam|đặt|dat|chạy|chay|click|gõ|go|nhập|nhap|youtube|google|volume|âm lượng|am luong)\b)"
+        r"|\s+(?:và|va)\s+(?=(?:mở|mo|tăng|tang|giảm|giam|bật|bat)\s+(?:âm lượng|am luong|volume))"
+    )
+    if not re.search(separator, command, flags=re.IGNORECASE):
         return [command]
-    parts = re.split(r"[;\n]+|\s+(?:rồi|roi|sau đó|sau do)\s+", command, flags=re.IGNORECASE)
+    parts = re.split(separator, command, flags=re.IGNORECASE)
     return [part.strip() for part in parts if part.strip()]
 
 
@@ -2044,6 +2349,10 @@ def execute_computer_command(
         if "chup man hinh" in plain or "xem man hinh" in plain:
             return _screenshot()
 
+        volume_result = _set_volume_result(command, plain)
+        if volume_result is not None:
+            return volume_result
+
         if re.match(r"^(?:hay\s+)?(?:minion\s+)?mo\b", plain) or "mo link" in plain or "mo trang" in plain:
             return _open_target(command, plain)
 
@@ -2111,7 +2420,7 @@ def execute_computer_command(
         return ComputerUseResult(
             True,
             False,
-            "Em chưa hiểu thao tác máy này. Anh có thể dùng: `mở notepad`, `vị trí chuột`, `di chuyển chuột tới 500 300`, `click`, `gõ \"nội dung\"`, `bấm phím ctrl+l`.",
+            "Em chưa hiểu thao tác máy này. Anh có thể dùng: `mở notepad`, `vị trí chuột`, `di chuyển chuột tới 500 300`, `click`, `gõ \"nội dung\"`, `bấm phím ctrl+l`, `kiểm tra dự án`.",
             "unknown",
         )
     except Exception as exc:

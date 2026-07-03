@@ -49,6 +49,7 @@ from computer_use import (
     get_computer_state,
     plan_agent_steps,
     screenshot_result,
+    workspace_diagnostics_result,
     workspace_list_files_result,
     workspace_patch_result,
     workspace_read_result,
@@ -1237,7 +1238,7 @@ async def _ollama_chat_proxy(req: "ChatRequest", alias_name: str, target_name: s
             "role": "system",
             "content": (
                 "Bạn là Minion, trợ lý AI tiếng Việt chạy local cho môi giới nhà phố tại TP.HCM. "
-                "Trả lời thực dụng, ngắn gọn, có cấu trúc rõ khi nhiều ý. "
+                "Trả lời tiếng Việt có dấu đầy đủ, thực dụng, ngắn gọn, có cấu trúc rõ khi nhiều ý. "
                 "Không bịa dữ liệu nhà, tiểu sử cá nhân, hoặc thông tin bạn không chắc. "
                 "Nếu thiếu dữ liệu thì nói thẳng là chưa có trong dữ liệu hiện tại."
             ),
@@ -2293,6 +2294,11 @@ async def api_agent_run_resume(run_id: str):
 @app.get("/api/workspace/status")
 async def api_workspace_status():
     return _computer_result_payload(workspace_status_result())
+
+
+@app.get("/api/workspace/diagnostics")
+async def api_workspace_diagnostics():
+    return _computer_result_payload(workspace_diagnostics_result())
 
 
 @app.post("/api/workspace/files")
