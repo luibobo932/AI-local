@@ -570,6 +570,7 @@ const toolCommands = [
   { label: 'Cửa sổ', command: 'danh sách cửa sổ' },
   { label: 'Workspace', command: 'workspace status' },
   { label: 'Kiểm tra', command: 'kiểm tra dự án' },
+  { label: 'Review', command: 'review dự án' },
   { label: 'Tìm code', command: 'tìm code "TODO"' },
   { label: 'Agent mẫu', command: 'agent: xem màn hình rồi danh sách cửa sổ' }
 ];
@@ -856,6 +857,46 @@ function renderComputerPayload(bubble, payload, stickToBottom = isChatNearBottom
       item.appendChild(title);
       item.appendChild(command);
       item.appendChild(block);
+      panel.appendChild(item);
+    });
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
+  if (payload.type === 'workspace_review' && Array.isArray(payload.findings)) {
+    const summary = document.createElement('div');
+    summary.className = 'computer-meta';
+    const counts = payload.summary || {};
+    summary.textContent = `Review: ${counts.findings || 0} finding, ${counts.blockers || 0} cần xử lý sớm - ${payload.root || ''}`;
+    panel.appendChild(summary);
+
+    if (!payload.findings.length) {
+      const empty = document.createElement('div');
+      empty.className = 'computer-step';
+      empty.textContent = 'Không thấy lỗi blocker trong các check hiện tại.';
+      panel.appendChild(empty);
+    }
+
+    payload.findings.forEach((finding) => {
+      const item = document.createElement('div');
+      item.className = 'computer-step';
+      const title = document.createElement('strong');
+      title.textContent = `${finding.severity || 'P?'}: ${finding.title || 'Finding'}`;
+      const detail = document.createElement('div');
+      detail.textContent = finding.detail || '';
+      const command = document.createElement('div');
+      command.className = 'computer-meta';
+      command.textContent = finding.command || '';
+      item.appendChild(title);
+      item.appendChild(detail);
+      if (finding.command) item.appendChild(command);
+      if (finding.evidence) {
+        const block = document.createElement('pre');
+        block.className = 'computer-result-block';
+        block.textContent = finding.evidence;
+        item.appendChild(block);
+      }
       panel.appendChild(item);
     });
     bubble.appendChild(panel);

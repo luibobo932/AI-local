@@ -53,6 +53,7 @@ from computer_use import (
     workspace_list_files_result,
     workspace_patch_result,
     workspace_read_result,
+    workspace_review_result,
     workspace_run_command_result,
     workspace_search_result,
     workspace_status_result,
@@ -2299,6 +2300,11 @@ async def api_workspace_status():
 @app.get("/api/workspace/diagnostics")
 async def api_workspace_diagnostics():
     return _computer_result_payload(workspace_diagnostics_result())
+
+
+@app.get("/api/workspace/review")
+async def api_workspace_review():
+    return _computer_result_payload(workspace_review_result())
 
 
 @app.post("/api/workspace/files")

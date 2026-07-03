@@ -289,6 +289,10 @@ def _looks_like_computer_command(plain: str) -> bool:
         "kiem tra loi",
         "kiem tra minion",
         "review du an",
+        "review code",
+        "code review",
+        "soat du an",
+        "soat loi",
         "diagnostics",
         "codex check",
         "chay test du an",
@@ -1384,7 +1388,12 @@ def _workspace_status() -> ComputerUseResult:
     return ComputerUseResult(True, True, message, "workspace_status", {"type": "workspace", "root": str(root), "output": message})
 
 
-def _run_diagnostic_command(name: str, args: list[str], timeout: int = 30) -> dict:
+def _run_diagnostic_command(
+    name: str,
+    args: list[str],
+    timeout: int = 30,
+    ok_returncodes: tuple[int, ...] = (0,),
+) -> dict:
     root = _workspace_root()
     command_text = " ".join(args)
     try:
@@ -1400,7 +1409,7 @@ def _run_diagnostic_command(name: str, args: list[str], timeout: int = 30) -> di
         output = "\n".join(part for part in [(completed.stdout or "").strip(), (completed.stderr or "").strip()] if part)
         return {
             "name": name,
-            "ok": completed.returncode == 0,
+            "ok": completed.returncode in ok_returncodes,
             "command": command_text,
             "returncode": completed.returncode,
             "output": _trim_output(output or "(không có output)", 8000),
@@ -1475,6 +1484,137 @@ def _workspace_diagnostics() -> ComputerUseResult:
             "root": str(_workspace_root()),
             "checks": checks,
             "summary": {"total": len(checks), "passed": passed, "failed": failed},
+        },
+    )
+
+
+def _review_find_check(checks: list[dict], name: str) -> dict | None:
+    for check in checks:
+        if check.get("name") == name:
+            return check
+    return None
+
+
+def _review_output_lines(output: str, max_lines: int = 12) -> list[str]:
+    if not output or output == "(không có output)":
+        return []
+    return [line for line in output.splitlines() if line.strip()][:max_lines]
+
+
+def _review_todo_comment_lines(output: str, max_lines: int = 20) -> list[str]:
+    matches: list[str] = []
+    for line in _review_output_lines(output, max_lines=300):
+        match = re.match(r"^(.+?):(\d+):(.*)$", line)
+        body = match.group(3).strip() if match else line.strip()
+        if re.match(r"(#|//|/\*|\*|<!--)\s*(TODO|FIXME|HACK|XXX)\b", body, flags=re.IGNORECASE):
+            matches.append(line)
+        if len(matches) >= max_lines:
+            break
+    return matches
+
+
+def _workspace_review() -> ComputerUseResult:
+    diagnostics = _workspace_diagnostics()
+    checks = list((diagnostics.data or {}).get("checks") or [])
+    diff_check = _run_diagnostic_command("diff whitespace", ["git", "diff", "--check"], timeout=15)
+    todo_check = _run_diagnostic_command(
+        "todo scan",
+        ["rg", "-n", "--hidden", "-S", "TODO|FIXME|HACK|XXX", "-g", "!.git"],
+        timeout=20,
+        ok_returncodes=(0, 1),
+    )
+    checks.extend([diff_check, todo_check])
+
+    findings: list[dict] = []
+    compile_check = _review_find_check(checks, "python compile")
+    tests_check = _review_find_check(checks, "unit tests")
+    server_check = _review_find_check(checks, "server health")
+    git_check = _review_find_check(checks, "git status")
+
+    if compile_check and not compile_check.get("ok"):
+        findings.append({
+            "severity": "P0",
+            "title": "Python compile đang lỗi",
+            "detail": "Server hoặc computer-use có thể không khởi động được nếu compile fail.",
+            "evidence": compile_check.get("output", ""),
+            "command": compile_check.get("command", ""),
+        })
+
+    if tests_check and not tests_check.get("ok"):
+        findings.append({
+            "severity": "P1",
+            "title": "Unit test đang fail",
+            "detail": "Có regression trong hợp đồng computer-use/workspace cần sửa trước khi tiếp tục phát triển.",
+            "evidence": tests_check.get("output", ""),
+            "command": tests_check.get("command", ""),
+        })
+
+    if server_check and not server_check.get("ok"):
+        findings.append({
+            "severity": "P2",
+            "title": "Server local chưa sẵn sàng",
+            "detail": "UI desktop có thể mở nhưng chat/computer-use sẽ báo lỗi kết nối.",
+            "evidence": server_check.get("output", ""),
+            "command": server_check.get("command", ""),
+        })
+
+    if diff_check and not diff_check.get("ok"):
+        findings.append({
+            "severity": "P2",
+            "title": "Diff có lỗi whitespace hoặc conflict marker",
+            "detail": "Cần xử lý trước khi commit để tránh lỗi format hoặc merge artifact lọt vào repo.",
+            "evidence": diff_check.get("output", ""),
+            "command": diff_check.get("command", ""),
+        })
+
+    dirty_lines = []
+    if git_check:
+        dirty_lines = [
+            line for line in _review_output_lines(git_check.get("output", ""), max_lines=40)
+            if not line.startswith("##")
+        ]
+    if dirty_lines:
+        findings.append({
+            "severity": "P3",
+            "title": "Có thay đổi chưa commit",
+            "detail": "Không phải lỗi runtime, nhưng nên commit/push sau khi verify để trạng thái cowork rõ ràng.",
+            "evidence": "\n".join(dirty_lines[:20]),
+            "command": git_check.get("command", "") if git_check else "",
+        })
+
+    todo_lines = _review_todo_comment_lines(todo_check.get("output", "") if todo_check else "", max_lines=20)
+    if todo_lines:
+        findings.append({
+            "severity": "P3",
+            "title": f"Còn {len(todo_lines)} dòng TODO/FIXME/HACK/XXX đầu tiên",
+            "detail": "Đây là nợ kỹ thuật cần xem lại khi nâng Minion thành cowork/code agent hoàn chỉnh.",
+            "evidence": "\n".join(todo_lines),
+            "command": todo_check.get("command", "") if todo_check else "",
+        })
+
+    blocker_count = sum(1 for item in findings if item.get("severity") in {"P0", "P1", "P2"})
+    lines = [f"Review dự án xong: {len(findings)} finding, {blocker_count} finding cần xử lý sớm."]
+    if not findings:
+        lines.append("Không thấy lỗi blocker trong compile, test, server, diff hoặc TODO scan.")
+    else:
+        for finding in findings:
+            lines.append(f"- {finding['severity']}: {finding['title']}")
+
+    return ComputerUseResult(
+        True,
+        blocker_count == 0,
+        "\n".join(lines),
+        "workspace_review",
+        {
+            "type": "workspace_review",
+            "root": str(_workspace_root()),
+            "findings": findings,
+            "checks": checks,
+            "summary": {
+                "findings": len(findings),
+                "blockers": blocker_count,
+                "checks": len(checks),
+            },
         },
     )
 
@@ -1578,10 +1718,17 @@ def _workspace_replace_in_file(command: str, plain: str) -> ComputerUseResult:
 
 def _workspace_result(command: str, plain: str) -> ComputerUseResult | None:
     if (
-        "kiem tra du an" in plain
+        "review du an" in plain
+        or "review code" in plain
+        or "code review" in plain
         or "kiem tra loi" in plain
+        or "soat du an" in plain
+        or "soat loi" in plain
+    ):
+        return _workspace_review()
+    if (
+        "kiem tra du an" in plain
         or "kiem tra minion" in plain
-        or "review du an" in plain
         or "diagnostics" in plain
         or "codex check" in plain
         or "chay test du an" in plain
@@ -1607,6 +1754,10 @@ def workspace_status_result() -> ComputerUseResult:
 
 def workspace_diagnostics_result() -> ComputerUseResult:
     return _workspace_diagnostics()
+
+
+def workspace_review_result() -> ComputerUseResult:
+    return _workspace_review()
 
 
 def workspace_list_files_result(query: str = "") -> ComputerUseResult:

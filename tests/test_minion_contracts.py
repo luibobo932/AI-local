@@ -2,9 +2,11 @@ import unittest
 from unittest.mock import patch
 
 from computer_use import (
+    ComputerUseResult,
     execute_computer_command,
     workspace_diagnostics_result,
     workspace_patch_result,
+    workspace_review_result,
     workspace_status_result,
 )
 
@@ -81,6 +83,51 @@ class MinionComputerUseContracts(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(result.data.get("summary", {}).get("total"), 4)
+
+    def test_workspace_review_reports_findings(self):
+        diagnostics = ComputerUseResult(
+            True,
+            True,
+            "diag",
+            "workspace_diagnostics",
+            {
+                "type": "workspace_diagnostics",
+                "checks": [
+                    {"name": "git status", "ok": True, "command": "git status --short --branch --untracked-files=all", "returncode": 0, "output": "## branch\n M computer_use.py"},
+                    {"name": "python compile", "ok": True, "command": "python -m py_compile computer_use.py server.py", "returncode": 0, "output": "(không có output)"},
+                    {"name": "unit tests", "ok": True, "command": "python -m unittest tests.test_minion_contracts", "returncode": 0, "output": "OK"},
+                    {"name": "server health", "ok": True, "command": "connect 127.0.0.1:11435", "returncode": 0, "output": "OK"},
+                ],
+            },
+        )
+        review_checks = [
+            {"name": "diff whitespace", "ok": True, "command": "git diff --check", "returncode": 0, "output": "(không có output)"},
+            {"name": "todo scan", "ok": True, "command": "rg TODO", "returncode": 0, "output": "computer_use.py:1:# TODO: demo"},
+        ]
+        with (
+            patch("computer_use._workspace_diagnostics", return_value=diagnostics),
+            patch("computer_use._run_diagnostic_command", side_effect=review_checks),
+        ):
+            result = execute_computer_command("review dự án", True)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.action, "workspace_review")
+        self.assertEqual(result.data.get("type"), "workspace_review")
+        titles = [item.get("title") for item in result.data.get("findings", [])]
+        self.assertIn("Có thay đổi chưa commit", titles)
+        self.assertTrue(any("TODO" in title for title in titles))
+
+    def test_workspace_review_public_function(self):
+        diagnostics = ComputerUseResult(True, True, "diag", "workspace_diagnostics", {"checks": []})
+        with (
+            patch("computer_use._workspace_diagnostics", return_value=diagnostics),
+            patch("computer_use._run_diagnostic_command", return_value={"name": "check", "ok": True, "command": "cmd", "returncode": 0, "output": "(không có output)"}),
+        ):
+            result = workspace_review_result()
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.data.get("type"), "workspace_review")
 
     def test_youtube_query_keeps_vietnamese_accents(self):
         with (
