@@ -189,7 +189,7 @@ Minion hiện có các phần chính:
 - Chat tiếng Việt với persona rõ: Minion là trợ lý local do Duy phát triển.
 - Computer-use local: chụp màn hình, đọc UI tree, click/gõ/cuộn chuột, focus cửa sổ, resize/minimize/maximize, mở app/link.
 - Agent nhiều bước: `POST /api/agent/run`, xem trạng thái tại `/api/agent/runs/{id}`, có stop/pause/resume.
-- Workspace/code agent API: status, diagnostics, review findings, list files, search, read, diff/patch exact replace, run command trong workspace.
+- Workspace/code agent API: status, diagnostics, review findings, current diff, list files, search, read, diff/patch exact replace, run command trong workspace.
 - Quyền an toàn mặc định: `ask_when_risky`. Shell command, sửa file, ghi clipboard, đóng cửa sổ phải xác nhận một lần; lệnh nguy hiểm như `git reset --hard`, `rm -rf`, `Remove-Item -Recurse` bị chặn.
 - Cấu hình nằm ở `minion.config.json`.
 
@@ -205,6 +205,7 @@ POST /api/agent/runs/{id}/resume
 GET  /api/workspace/status
 GET  /api/workspace/diagnostics
 GET  /api/workspace/review
+GET  /api/workspace/diff
 POST /api/workspace/files
 POST /api/workspace/search
 POST /api/workspace/read

@@ -49,6 +49,7 @@ from computer_use import (
     get_computer_state,
     plan_agent_steps,
     screenshot_result,
+    workspace_current_diff_result,
     workspace_diagnostics_result,
     workspace_list_files_result,
     workspace_patch_result,
@@ -2305,6 +2306,11 @@ async def api_workspace_diagnostics():
 @app.get("/api/workspace/review")
 async def api_workspace_review():
     return _computer_result_payload(workspace_review_result())
+
+
+@app.get("/api/workspace/diff")
+async def api_workspace_diff():
+    return _computer_result_payload(workspace_current_diff_result())
 
 
 @app.post("/api/workspace/files")

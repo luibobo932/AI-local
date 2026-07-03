@@ -4,6 +4,7 @@ from unittest.mock import patch
 from computer_use import (
     ComputerUseResult,
     execute_computer_command,
+    workspace_current_diff_result,
     workspace_diagnostics_result,
     workspace_patch_result,
     workspace_review_result,
@@ -17,6 +18,7 @@ class MinionComputerUseContracts(unittest.TestCase):
             "Tìm nhà Gò Vấp diện tích trên 60m2",
             "mô tả căn nhà Quận 10",
             "Có căn nào ngang từ 4m không?",
+            "căn này có thay đổi giá không?",
         ]
         for text in samples:
             with self.subTest(text=text):
@@ -128,6 +130,31 @@ class MinionComputerUseContracts(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(result.data.get("type"), "workspace_review")
+
+    def test_workspace_current_diff_is_safe_and_structured(self):
+        fake_checks = [
+            {"name": "git status", "ok": True, "command": "git status --short --branch --untracked-files=all", "returncode": 0, "output": "## branch\n M computer_use.py\n?? notes.txt"},
+            {"name": "git diff stat", "ok": True, "command": "git diff --stat HEAD --", "returncode": 0, "output": " computer_use.py | 2 ++"},
+            {"name": "git diff files", "ok": True, "command": "git diff --name-only HEAD --", "returncode": 0, "output": "computer_use.py"},
+            {"name": "git diff", "ok": True, "command": "git diff --color=never HEAD --", "returncode": 0, "output": "diff --git a/computer_use.py b/computer_use.py"},
+        ]
+        with patch("computer_use._run_diagnostic_command", side_effect=fake_checks):
+            result = execute_computer_command("xem diff", True)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.action, "workspace_current_diff")
+        self.assertEqual(result.risk_level, "safe")
+        self.assertEqual(result.data.get("type"), "workspace_current_diff")
+        self.assertEqual(result.data.get("summary", {}).get("changed"), 2)
+        self.assertIn("notes.txt", result.data.get("files", []))
+
+    def test_workspace_current_diff_public_function(self):
+        with patch("computer_use._run_diagnostic_command", return_value={"name": "check", "ok": True, "command": "cmd", "returncode": 0, "output": "(không có output)"}):
+            result = workspace_current_diff_result()
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.data.get("type"), "workspace_current_diff")
 
     def test_youtube_query_keeps_vietnamese_accents(self):
         with (

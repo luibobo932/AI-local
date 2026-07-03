@@ -571,6 +571,7 @@ const toolCommands = [
   { label: 'Workspace', command: 'workspace status' },
   { label: 'Kiểm tra', command: 'kiểm tra dự án' },
   { label: 'Review', command: 'review dự án' },
+  { label: 'Diff', command: 'xem diff' },
   { label: 'Tìm code', command: 'tìm code "TODO"' },
   { label: 'Agent mẫu', command: 'agent: xem màn hình rồi danh sách cửa sổ' }
 ];
@@ -598,7 +599,7 @@ toolCommands.forEach((item) => {
     computerUseEnabled.checked = true;
     computerUseToggle.classList.add('active');
     input.value = item.command;
-    send();
+    sendComputerCommand(item.command);
   };
   toolButtons.appendChild(btn);
 });
@@ -904,6 +905,44 @@ function renderComputerPayload(bubble, payload, stickToBottom = isChatNearBottom
     return;
   }
 
+  if (payload.type === 'workspace_current_diff') {
+    const summary = document.createElement('div');
+    summary.className = 'computer-meta';
+    const counts = payload.summary || {};
+    summary.textContent = `Diff: ${counts.changed || 0} thay đổi, ${counts.files || 0} file - ${payload.root || ''}`;
+    panel.appendChild(summary);
+
+    if (Array.isArray(payload.files) && payload.files.length) {
+      const files = document.createElement('pre');
+      files.className = 'computer-result-block';
+      files.textContent = payload.files.join('\n');
+      panel.appendChild(files);
+    }
+
+    const stat = document.createElement('pre');
+    stat.className = 'computer-result-block';
+    stat.textContent = payload.stat || '(không có diff stat)';
+    panel.appendChild(stat);
+
+    if (payload.diff) {
+      const block = document.createElement('pre');
+      block.className = 'computer-result-block';
+      block.textContent = payload.diff;
+      panel.appendChild(block);
+    }
+
+    if (payload.truncated) {
+      const note = document.createElement('div');
+      note.className = 'computer-meta';
+      note.textContent = 'Diff dài nên Minion đã cắt bớt phần cuối.';
+      panel.appendChild(note);
+    }
+
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
   if (payload.type === 'workspace_run' || payload.type === 'workspace') {
     const block = document.createElement('pre');
     block.className = 'computer-result-block';
@@ -1045,6 +1084,44 @@ function appendComputerResult(result) {
   const bubble = addBubble('bot', text);
   if (result?.data) renderComputerPayload(bubble, result.data);
   return bubble;
+}
+
+async function sendComputerCommand(command) {
+  const text = (command || '').trim();
+  if (!text || busy) return;
+
+  busy = true;
+  stopRequested = false;
+  currentChatController = new AbortController();
+  sendBtn.disabled = true;
+  stopChatBtn.disabled = false;
+  addBubble('user', text);
+  history.push({ role: 'user', content: text });
+
+  try {
+    const resp = await fetch('/api/computer-use/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: text, enabled: true }),
+      signal: currentChatController.signal
+    });
+    if (!resp.ok) throw new Error('Computer-use API trả lỗi ' + resp.status);
+    const result = await resp.json();
+    appendComputerResult(result);
+    if (result?.message) history.push({ role: 'assistant', content: result.message });
+  } catch (error) {
+    const message = (error.name === 'AbortError' || stopRequested)
+      ? 'Đã ngưng chat.'
+      : `Không chạy được lệnh công cụ: ${error}`;
+    appendComputerResult({ ok: false, message });
+  }
+
+  busy = false;
+  sendBtn.disabled = false;
+  stopChatBtn.disabled = true;
+  currentChatController = null;
+  stopRequested = false;
+  input.focus();
 }
 
 async function runApprovedCommand(command, approvalId) {

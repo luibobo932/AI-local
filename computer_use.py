@@ -293,6 +293,12 @@ def _looks_like_computer_command(plain: str) -> bool:
         "code review",
         "soat du an",
         "soat loi",
+        "xem diff",
+        "git diff",
+        "diff workspace",
+        "diff du an",
+        "xem thay doi code",
+        "xem thay doi du an",
         "diagnostics",
         "codex check",
         "chay test du an",
@@ -1406,12 +1412,16 @@ def _run_diagnostic_command(
             errors="replace",
             timeout=timeout,
         )
-        output = "\n".join(part for part in [(completed.stdout or "").strip(), (completed.stderr or "").strip()] if part)
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        output = "\n".join(part for part in [stdout, stderr] if part)
         return {
             "name": name,
             "ok": completed.returncode in ok_returncodes,
             "command": command_text,
             "returncode": completed.returncode,
+            "stdout": _trim_output(stdout, 8000),
+            "stderr": _trim_output(stderr, 8000),
             "output": _trim_output(output or "(không có output)", 8000),
         }
     except subprocess.TimeoutExpired as exc:
@@ -1425,6 +1435,8 @@ def _run_diagnostic_command(
             "ok": False,
             "command": command_text,
             "returncode": None,
+            "stdout": "",
+            "stderr": "",
             "output": _trim_output(f"Quá thời gian {timeout} giây.\n{partial}".strip(), 8000),
         }
     except Exception as exc:
@@ -1433,6 +1445,8 @@ def _run_diagnostic_command(
             "ok": False,
             "command": command_text,
             "returncode": None,
+            "stdout": "",
+            "stderr": "",
             "output": f"Không chạy được check: {exc}",
         }
 
@@ -1484,6 +1498,69 @@ def _workspace_diagnostics() -> ComputerUseResult:
             "root": str(_workspace_root()),
             "checks": checks,
             "summary": {"total": len(checks), "passed": passed, "failed": failed},
+        },
+    )
+
+
+def _check_stdout(check: dict) -> str:
+    if "stdout" in check:
+        return str(check.get("stdout") or "")
+    return check.get("output", "") or ""
+
+
+def _workspace_current_diff() -> ComputerUseResult:
+    root = _workspace_root()
+    status_check = _run_diagnostic_command("git status", ["git", "status", "--short", "--branch", "--untracked-files=all"], timeout=10)
+    stat_check = _run_diagnostic_command("git diff stat", ["git", "diff", "--stat", "HEAD", "--"], timeout=15)
+    files_check = _run_diagnostic_command("git diff files", ["git", "diff", "--name-only", "HEAD", "--"], timeout=15)
+    diff_check = _run_diagnostic_command("git diff", ["git", "diff", "--color=never", "HEAD", "--"], timeout=20)
+
+    checks = [status_check, stat_check, files_check, diff_check]
+    ok = all(check.get("ok") for check in checks)
+    status_lines = [
+        line for line in _check_stdout(status_check).splitlines()
+        if line.strip() and not line.startswith("##") and line.strip() != "(không có output)"
+    ]
+    tracked_files = [
+        line.strip() for line in _check_stdout(files_check).splitlines()
+        if line.strip() and line.strip() != "(không có output)"
+    ]
+    untracked_files = []
+    for line in status_lines:
+        if line.startswith("?? "):
+            untracked_files.append(line[3:].strip())
+    files = sorted(set(tracked_files + untracked_files))
+    raw_diff = _check_stdout(diff_check)
+    diff = _trim_output(raw_diff, 20000)
+    truncated = len(raw_diff) > len(diff)
+
+    if not ok:
+        message = "Không đọc được diff workspace. Anh xem chi tiết trong output check."
+    elif not status_lines:
+        message = "Workspace đang sạch, không có diff so với HEAD."
+    else:
+        message = f"Workspace có {len(status_lines)} thay đổi, {len(files)} file liên quan."
+
+    return ComputerUseResult(
+        True,
+        ok,
+        message,
+        "workspace_current_diff",
+        {
+            "type": "workspace_current_diff",
+            "root": str(root),
+            "status": _check_stdout(status_check),
+            "stat": _check_stdout(stat_check),
+            "files": files,
+            "diff": diff if diff != "(không có output)" else "",
+            "truncated": truncated,
+            "checks": checks,
+            "summary": {
+                "changed": len(status_lines),
+                "files": len(files),
+                "tracked_files": len(tracked_files),
+                "untracked_files": len(untracked_files),
+            },
         },
     )
 
@@ -1718,6 +1795,15 @@ def _workspace_replace_in_file(command: str, plain: str) -> ComputerUseResult:
 
 def _workspace_result(command: str, plain: str) -> ComputerUseResult | None:
     if (
+        "xem diff" in plain
+        or "git diff" in plain
+        or "diff workspace" in plain
+        or "diff du an" in plain
+        or "xem thay doi code" in plain
+        or "xem thay doi du an" in plain
+    ):
+        return _workspace_current_diff()
+    if (
         "review du an" in plain
         or "review code" in plain
         or "code review" in plain
@@ -1758,6 +1844,10 @@ def workspace_diagnostics_result() -> ComputerUseResult:
 
 def workspace_review_result() -> ComputerUseResult:
     return _workspace_review()
+
+
+def workspace_current_diff_result() -> ComputerUseResult:
+    return _workspace_current_diff()
 
 
 def workspace_list_files_result(query: str = "") -> ComputerUseResult:
