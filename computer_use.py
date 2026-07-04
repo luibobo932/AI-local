@@ -8,12 +8,18 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 import shutil
 import subprocess
 import time
 import unicodedata
 import urllib.parse
 import urllib.request
+import html
+import difflib
+import hashlib
+import json
+import uuid
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -27,6 +33,38 @@ class ComputerUseResult:
     message: str
     action: str = ""
     data: dict = field(default_factory=dict)
+    risk_level: str = "safe"
+    needs_approval: bool = False
+    approval_id: str = ""
+    artifacts: list[dict] = field(default_factory=list)
+
+
+_REPO_ROOT = Path(__file__).resolve().parent
+_CONFIG_PATH = _REPO_ROOT / "minion.config.json"
+_DEFAULT_CONFIG = {
+    "permission_mode": "ask_when_risky",
+    "max_agent_steps": 8,
+    "command_timeout_seconds": 20,
+    "allowed_workspace_roots": ["."],
+    "screenshot_dir": "output/computer-use",
+}
+_PENDING_APPROVALS: dict[str, dict] = {}
+_APPROVAL_TTL_SECONDS = 600
+
+
+def _load_minion_config() -> dict:
+    config = dict(_DEFAULT_CONFIG)
+    try:
+        raw = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            config.update(raw)
+    except Exception:
+        pass
+    return config
+
+
+def _minion_config() -> dict:
+    return _load_minion_config()
 
 
 def _plain_text(text: str) -> str:
@@ -34,6 +72,105 @@ def _plain_text(text: str) -> str:
     normalized = unicodedata.normalize("NFD", text)
     text = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _approval_key(command: str) -> str:
+    return re.sub(r"\s+", " ", command or "").strip()
+
+
+def _purge_expired_approvals() -> None:
+    now = time.time()
+    expired = [
+        approval_id
+        for approval_id, item in _PENDING_APPROVALS.items()
+        if now - float(item.get("created_at", 0)) > _APPROVAL_TTL_SECONDS
+    ]
+    for approval_id in expired:
+        _PENDING_APPROVALS.pop(approval_id, None)
+
+
+def _consume_approval(command_key: str, approval_token: str | None) -> bool:
+    if not approval_token:
+        return False
+    _purge_expired_approvals()
+    item = _PENDING_APPROVALS.get(approval_token)
+    if not item or item.get("command_key") != command_key:
+        return False
+    _PENDING_APPROVALS.pop(approval_token, None)
+    return True
+
+
+def _approval_result(command: str, action: str, risk_level: str, reason: str) -> ComputerUseResult:
+    approval_id = uuid.uuid4().hex
+    command_key = _approval_key(command)
+    _PENDING_APPROVALS[approval_id] = {
+        "command_key": command_key,
+        "command": command,
+        "action": action,
+        "risk_level": risk_level,
+        "reason": reason,
+        "created_at": time.time(),
+    }
+    return ComputerUseResult(
+        True,
+        False,
+        f"Minion cần anh xác nhận trước khi làm: {reason}",
+        action or "approval_required",
+        {
+            "type": "approval_request",
+            "approval_id": approval_id,
+            "command": command,
+            "action": action,
+            "risk_level": risk_level,
+            "reason": reason,
+            "expires_in_seconds": _APPROVAL_TTL_SECONDS,
+        },
+        risk_level=risk_level,
+        needs_approval=True,
+        approval_id=approval_id,
+    )
+
+
+def _dangerous_shell_text(text: str) -> bool:
+    plain = _plain_text(text)
+    patterns = [
+        r"\brm\s+-rf\b",
+        r"\bremove-item\b.*\b-recurse\b",
+        r"\brd\s+/s\b",
+        r"\brmdir\s+/s\b",
+        r"\bdel\s+/s\b",
+        r"\bformat\b",
+        r"\bdiskpart\b",
+        r"\bshutdown\b",
+        r"\brestart-computer\b",
+        r"\bstop-computer\b",
+        r"\bgit\s+reset\s+--hard\b",
+        r"\bgit\s+clean\s+-f",
+        r"\breg\s+delete\b",
+        r"\bbcdedit\b",
+        r"\bcipher\s+/w\b",
+    ]
+    return any(re.search(pattern, plain) for pattern in patterns)
+
+
+def _classify_command_risk(command: str, plain: str) -> tuple[str, str, str]:
+    if _dangerous_shell_text(command):
+        return "blocked", "blocked", "Lệnh thuộc nhóm nguy hiểm, Minion không tự chạy."
+    if "chay lenh" in plain or "run command" in plain:
+        return "shell", "needs_approval", "chạy lệnh shell trên máy"
+    if "thay trong file" in plain or "replace in file" in plain:
+        return "workspace_replace", "needs_approval", "sửa file trong workspace"
+    if "dong cua so" in plain or "close window" in plain:
+        return "close_window", "needs_approval", "đóng cửa sổ đang mở"
+    if (
+        "dat clipboard" in plain
+        or "set clipboard" in plain
+        or "ghi clipboard" in plain
+        or "luu clipboard" in plain
+        or "copy vao clipboard" in plain
+    ):
+        return "clipboard_write", "needs_approval", "ghi nội dung vào clipboard"
+    return "", "safe", ""
 
 
 def _looks_like_computer_command(plain: str) -> bool:
@@ -51,10 +188,11 @@ def _looks_like_computer_command(plain: str) -> bool:
         return True
     if re.match(r"^(?:hay\s+)?(?:minion\s+)?doi\s+[0-9]{1,2}\b", plain):
         return True
-    # Ý định mở chung: "mở <bất kỳ>", "khởi động <app>", "bật <app> lên"...
+    # Ý định mở chung: "mở <bất kỳ>", "bạn mở...", "khởi động <app>"...
+    # (loại trừ "mô tả/mô hình/mô phỏng/mơ ước..." vì bỏ dấu cũng thành "mo")
     if re.match(
         r"^(?:(?:hay|ban|minion|oi|lam on|vui long|giup|gium|dum)\s+)*"
-        r"(?:mo|khoi dong|khoi chay|truy cap)\s+\S+",
+        r"(?:mo(?!\s+(?:ta|hinh|phong|uoc|mong|ho)\b)|khoi dong|khoi chay|truy cap)\s+\S+",
         plain,
     ):
         return True
@@ -150,7 +288,44 @@ def _looks_like_computer_command(plain: str) -> bool:
         "scroll",
         "keo chuot",
         "drag",
+        "am luong",
+        "volume",
+        "tang am",
+        "giam am",
+        "mo am",
+        "bat am",
+        "kiem tra du an",
+        "kiem tra loi",
+        "kiem tra minion",
+        "review du an",
+        "review code",
+        "code review",
+        "soat du an",
+        "soat loi",
+        "xem diff",
+        "git diff",
+        "diff workspace",
+        "diff du an",
+        "xem thay doi code",
+        "xem thay doi du an",
+        "diagnostics",
+        "codex check",
+        "chay test du an",
+        "test du an",
         "chay lenh",
+        "workspace",
+        "trang thai workspace",
+        "git status",
+        "liet ke file",
+        "list files",
+        "tim file",
+        "find file",
+        "tim code",
+        "search code",
+        "doc file",
+        "read file",
+        "thay trong file",
+        "replace in file",
     ]
     return any(k in plain for k in keywords)
 
@@ -897,6 +1072,11 @@ _VK = {
     "xuong": 0x28,
     "trai": 0x25,
     "phai": 0x27,
+    "volumeup": 0xAF,
+    "volumedown": 0xAE,
+    "volumemute": 0xAD,
+    "tangamluong": 0xAF,
+    "giamamluong": 0xAE,
 }
 for i in range(1, 13):
     _VK[f"f{i}"] = 0x6F + i
@@ -931,6 +1111,48 @@ def _press_hotkey(keys: list[str]) -> None:
     for vk in reversed(parsed):
         user32.keybd_event(vk, 0, 0x0002, 0)
         time.sleep(0.03)
+
+
+def _tap_virtual_key(vk: int, count: int = 1, delay: float = 0.015) -> None:
+    if os.name != "nt":
+        raise RuntimeError("Computer-use hiện chỉ hỗ trợ Windows.")
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    for _ in range(max(1, count)):
+        user32.keybd_event(vk, 0, 0, 0)
+        time.sleep(delay)
+        user32.keybd_event(vk, 0, 0x0002, 0)
+        time.sleep(delay)
+
+
+def _set_volume_result(command: str, plain: str) -> ComputerUseResult | None:
+    if "am luong" not in plain and "volume" not in plain and "tieng" not in plain:
+        return None
+
+    if "toi da" in plain or "max" in plain or "100" in plain or "lon nhat" in plain:
+        _tap_virtual_key(_VK["volumeup"], count=50)
+        return ComputerUseResult(
+            True,
+            True,
+            "Đã tăng âm lượng máy tính lên tối đa.",
+            "volume_max",
+            {"type": "volume", "level": "max"},
+        )
+
+    if "tang" in plain or "mo lon" in plain or "to hon" in plain or "up" in plain:
+        _tap_virtual_key(_VK["volumeup"], count=8)
+        return ComputerUseResult(True, True, "Đã tăng âm lượng máy tính.", "volume_up", {"type": "volume"})
+
+    if "giam" in plain or "nho" in plain or "down" in plain:
+        _tap_virtual_key(_VK["volumedown"], count=8)
+        return ComputerUseResult(True, True, "Đã giảm âm lượng máy tính.", "volume_down", {"type": "volume"})
+
+    if "tat" in plain or "mute" in plain:
+        _tap_virtual_key(_VK["volumemute"], count=1)
+        return ComputerUseResult(True, True, "Đã bật/tắt mute âm lượng máy tính.", "volume_mute", {"type": "volume"})
+
+    return None
 
 
 def _open_clipboard_with_retry(user32, attempts: int = 12) -> None:
@@ -1069,6 +1291,712 @@ def _extract_quoted_text(text: str) -> str | None:
     return next(group for group in match.groups() if group)
 
 
+def _extract_all_quoted_text(text: str) -> list[str]:
+    matches = re.findall(r'"([^"]+)"|“([^”]+)”|\'([^\']+)\'', text)
+    return [next(group for group in groups if group) for groups in matches]
+
+
+def _workspace_root() -> Path:
+    return _REPO_ROOT
+
+
+def _workspace_roots() -> list[Path]:
+    config = _minion_config()
+    roots = config.get("allowed_workspace_roots") or ["."]
+    resolved: list[Path] = []
+    for item in roots:
+        try:
+            path = Path(str(item)).expanduser()
+            if not path.is_absolute():
+                path = _REPO_ROOT / path
+            path = path.resolve()
+        except Exception:
+            continue
+        if path not in resolved:
+            resolved.append(path)
+    if _REPO_ROOT not in resolved:
+        resolved.insert(0, _REPO_ROOT)
+    return resolved
+
+
+def _path_is_inside(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _resolve_workspace_path(target: str) -> Path:
+    if not target:
+        raise ValueError("Thiếu đường dẫn file.")
+    root = _workspace_root()
+    path = Path(target).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    path = path.resolve()
+    allowed_roots = _workspace_roots()
+    if not any(_path_is_inside(path, allowed_root) for allowed_root in allowed_roots):
+        raise ValueError("Đường dẫn nằm ngoài workspace Minion, không xử lý.")
+    return path
+
+
+def _trim_output(text: str, limit: int = 5000) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n... (đã cắt bớt output)"
+
+
+def _command_timeout(default: int = 20) -> int:
+    try:
+        return max(3, min(int(_minion_config().get("command_timeout_seconds", default)), 120))
+    except Exception:
+        return default
+
+
+def _backup_file(path: Path, original_text: str) -> Path:
+    backup_dir = _REPO_ROOT / "output" / "minion-backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:10]
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = backup_dir / f"{path.name}.{digest}.{stamp}.bak"
+    backup.write_text(original_text, encoding="utf-8")
+    return backup
+
+
+def _workspace_replace_preview(path: Path, old: str, new: str) -> tuple[str, int, str]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    count = text.count(old)
+    if count == 0:
+        return text, 0, ""
+    updated = text.replace(old, new)
+    diff = "\n".join(difflib.unified_diff(
+        text.splitlines(),
+        updated.splitlines(),
+        fromfile=str(path),
+        tofile=str(path) + " (minion)",
+        lineterm="",
+    ))
+    return updated, count, _trim_output(diff, 12000)
+
+
+def _workspace_patch_key(path: Path, old: str, new: str) -> str:
+    digest = hashlib.sha256((str(path) + "\0" + old + "\0" + new).encode("utf-8")).hexdigest()
+    return f"workspace_patch:{digest}"
+
+
+def _workspace_status() -> ComputerUseResult:
+    root = _workspace_root()
+    lines = [f"Workspace: {root}"]
+    try:
+        completed = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+        status = completed.stdout.strip() or "(git clean)"
+        lines.append("Git status:")
+        lines.append(_trim_output(status, 2000))
+    except Exception as exc:
+        lines.append(f"Không đọc được git status: {exc}")
+    message = "\n".join(lines)
+    return ComputerUseResult(True, True, message, "workspace_status", {"type": "workspace", "root": str(root), "output": message})
+
+
+def _run_diagnostic_command(
+    name: str,
+    args: list[str],
+    timeout: int = 30,
+    ok_returncodes: tuple[int, ...] = (0,),
+) -> dict:
+    root = _workspace_root()
+    command_text = " ".join(args)
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+        stdout = (completed.stdout or "").strip()
+        stderr = (completed.stderr or "").strip()
+        output = "\n".join(part for part in [stdout, stderr] if part)
+        return {
+            "name": name,
+            "ok": completed.returncode in ok_returncodes,
+            "command": command_text,
+            "returncode": completed.returncode,
+            "stdout": _trim_output(stdout, 8000),
+            "stderr": _trim_output(stderr, 8000),
+            "output": _trim_output(output or "(không có output)", 8000),
+        }
+    except subprocess.TimeoutExpired as exc:
+        partial = "\n".join(
+            part.decode("utf-8", errors="replace") if isinstance(part, bytes) else str(part)
+            for part in [exc.stdout, exc.stderr]
+            if part
+        ).strip()
+        return {
+            "name": name,
+            "ok": False,
+            "command": command_text,
+            "returncode": None,
+            "stdout": "",
+            "stderr": "",
+            "output": _trim_output(f"Quá thời gian {timeout} giây.\n{partial}".strip(), 8000),
+        }
+    except Exception as exc:
+        return {
+            "name": name,
+            "ok": False,
+            "command": command_text,
+            "returncode": None,
+            "stdout": "",
+            "stderr": "",
+            "output": f"Không chạy được check: {exc}",
+        }
+
+
+def _server_port_check_result(host: str = "127.0.0.1", port: int = 11435, timeout: float = 2.0) -> dict:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            output = f"Server local đang nhận kết nối tại http://{host}:{port}"
+            ok = True
+    except OSError as exc:
+        output = f"Chưa kết nối được server local tại http://{host}:{port}: {exc}"
+        ok = False
+    return {
+        "name": "server health",
+        "ok": ok,
+        "command": f"connect {host}:{port}",
+        "returncode": 0 if ok else None,
+        "output": output,
+    }
+
+
+def _workspace_diagnostics() -> ComputerUseResult:
+    checks = [
+        _run_diagnostic_command("git status", ["git", "status", "--short", "--branch", "--untracked-files=all"], timeout=10),
+        _run_diagnostic_command("python compile", ["python", "-m", "py_compile", "computer_use.py", "server.py"], timeout=25),
+        _run_diagnostic_command("unit tests", ["python", "-m", "unittest", "tests.test_minion_contracts"], timeout=60),
+        _server_port_check_result(),
+    ]
+    ok = all(check.get("ok") for check in checks)
+    passed = sum(1 for check in checks if check.get("ok"))
+    failed = len(checks) - passed
+    lines = [
+        f"Minion đã kiểm tra dự án: {passed}/{len(checks)} check OK.",
+    ]
+    if failed:
+        lines.append("Có lỗi cần xử lý trước khi xem là ổn định.")
+    else:
+        lines.append("Compile, test và server local đều ổn.")
+    for check in checks:
+        status = "OK" if check.get("ok") else "Lỗi"
+        lines.append(f"- {status}: {check.get('name')} ({check.get('command')})")
+    return ComputerUseResult(
+        True,
+        ok,
+        "\n".join(lines),
+        "workspace_diagnostics",
+        {
+            "type": "workspace_diagnostics",
+            "root": str(_workspace_root()),
+            "checks": checks,
+            "summary": {"total": len(checks), "passed": passed, "failed": failed},
+        },
+    )
+
+
+def _check_stdout(check: dict) -> str:
+    if "stdout" in check:
+        return str(check.get("stdout") or "")
+    return check.get("output", "") or ""
+
+
+def _workspace_current_diff() -> ComputerUseResult:
+    root = _workspace_root()
+    status_check = _run_diagnostic_command("git status", ["git", "status", "--short", "--branch", "--untracked-files=all"], timeout=10)
+    stat_check = _run_diagnostic_command("git diff stat", ["git", "diff", "--stat", "HEAD", "--"], timeout=15)
+    files_check = _run_diagnostic_command("git diff files", ["git", "diff", "--name-only", "HEAD", "--"], timeout=15)
+    diff_check = _run_diagnostic_command("git diff", ["git", "diff", "--color=never", "HEAD", "--"], timeout=20)
+
+    checks = [status_check, stat_check, files_check, diff_check]
+    ok = all(check.get("ok") for check in checks)
+    status_lines = [
+        line for line in _check_stdout(status_check).splitlines()
+        if line.strip() and not line.startswith("##") and line.strip() != "(không có output)"
+    ]
+    tracked_files = [
+        line.strip() for line in _check_stdout(files_check).splitlines()
+        if line.strip() and line.strip() != "(không có output)"
+    ]
+    untracked_files = []
+    for line in status_lines:
+        if line.startswith("?? "):
+            untracked_files.append(line[3:].strip())
+    files = sorted(set(tracked_files + untracked_files))
+    raw_diff = _check_stdout(diff_check)
+    diff = _trim_output(raw_diff, 20000)
+    truncated = len(raw_diff) > len(diff)
+
+    if not ok:
+        message = "Không đọc được diff workspace. Anh xem chi tiết trong output check."
+    elif not status_lines:
+        message = "Workspace đang sạch, không có diff so với HEAD."
+    else:
+        message = f"Workspace có {len(status_lines)} thay đổi, {len(files)} file liên quan."
+
+    return ComputerUseResult(
+        True,
+        ok,
+        message,
+        "workspace_current_diff",
+        {
+            "type": "workspace_current_diff",
+            "root": str(root),
+            "status": _check_stdout(status_check),
+            "stat": _check_stdout(stat_check),
+            "files": files,
+            "diff": diff if diff != "(không có output)" else "",
+            "truncated": truncated,
+            "checks": checks,
+            "summary": {
+                "changed": len(status_lines),
+                "files": len(files),
+                "tracked_files": len(tracked_files),
+                "untracked_files": len(untracked_files),
+            },
+        },
+    )
+
+
+def _review_find_check(checks: list[dict], name: str) -> dict | None:
+    for check in checks:
+        if check.get("name") == name:
+            return check
+    return None
+
+
+def _review_output_lines(output: str, max_lines: int = 12) -> list[str]:
+    if not output or output == "(không có output)":
+        return []
+    return [line for line in output.splitlines() if line.strip()][:max_lines]
+
+
+def _review_todo_comment_lines(output: str, max_lines: int = 20) -> list[str]:
+    matches: list[str] = []
+    for line in _review_output_lines(output, max_lines=300):
+        match = re.match(r"^(.+?):(\d+):(.*)$", line)
+        body = match.group(3).strip() if match else line.strip()
+        if re.match(r"(#|//|/\*|\*|<!--)\s*(TODO|FIXME|HACK|XXX)\b", body, flags=re.IGNORECASE):
+            matches.append(line)
+        if len(matches) >= max_lines:
+            break
+    return matches
+
+
+def _workspace_review() -> ComputerUseResult:
+    diagnostics = _workspace_diagnostics()
+    checks = list((diagnostics.data or {}).get("checks") or [])
+    diff_check = _run_diagnostic_command("diff whitespace", ["git", "diff", "--check"], timeout=15)
+    todo_check = _run_diagnostic_command(
+        "todo scan",
+        ["rg", "-n", "--hidden", "-S", "TODO|FIXME|HACK|XXX", "-g", "!.git"],
+        timeout=20,
+        ok_returncodes=(0, 1),
+    )
+    checks.extend([diff_check, todo_check])
+
+    findings: list[dict] = []
+    compile_check = _review_find_check(checks, "python compile")
+    tests_check = _review_find_check(checks, "unit tests")
+    server_check = _review_find_check(checks, "server health")
+    git_check = _review_find_check(checks, "git status")
+
+    if compile_check and not compile_check.get("ok"):
+        findings.append({
+            "severity": "P0",
+            "title": "Python compile đang lỗi",
+            "detail": "Server hoặc computer-use có thể không khởi động được nếu compile fail.",
+            "evidence": compile_check.get("output", ""),
+            "command": compile_check.get("command", ""),
+        })
+
+    if tests_check and not tests_check.get("ok"):
+        findings.append({
+            "severity": "P1",
+            "title": "Unit test đang fail",
+            "detail": "Có regression trong hợp đồng computer-use/workspace cần sửa trước khi tiếp tục phát triển.",
+            "evidence": tests_check.get("output", ""),
+            "command": tests_check.get("command", ""),
+        })
+
+    if server_check and not server_check.get("ok"):
+        findings.append({
+            "severity": "P2",
+            "title": "Server local chưa sẵn sàng",
+            "detail": "UI desktop có thể mở nhưng chat/computer-use sẽ báo lỗi kết nối.",
+            "evidence": server_check.get("output", ""),
+            "command": server_check.get("command", ""),
+        })
+
+    if diff_check and not diff_check.get("ok"):
+        findings.append({
+            "severity": "P2",
+            "title": "Diff có lỗi whitespace hoặc conflict marker",
+            "detail": "Cần xử lý trước khi commit để tránh lỗi format hoặc merge artifact lọt vào repo.",
+            "evidence": diff_check.get("output", ""),
+            "command": diff_check.get("command", ""),
+        })
+
+    dirty_lines = []
+    if git_check:
+        dirty_lines = [
+            line for line in _review_output_lines(git_check.get("output", ""), max_lines=40)
+            if not line.startswith("##")
+        ]
+    if dirty_lines:
+        findings.append({
+            "severity": "P3",
+            "title": "Có thay đổi chưa commit",
+            "detail": "Không phải lỗi runtime, nhưng nên commit/push sau khi verify để trạng thái cowork rõ ràng.",
+            "evidence": "\n".join(dirty_lines[:20]),
+            "command": git_check.get("command", "") if git_check else "",
+        })
+
+    todo_lines = _review_todo_comment_lines(todo_check.get("output", "") if todo_check else "", max_lines=20)
+    if todo_lines:
+        findings.append({
+            "severity": "P3",
+            "title": f"Còn {len(todo_lines)} dòng TODO/FIXME/HACK/XXX đầu tiên",
+            "detail": "Đây là nợ kỹ thuật cần xem lại khi nâng Minion thành cowork/code agent hoàn chỉnh.",
+            "evidence": "\n".join(todo_lines),
+            "command": todo_check.get("command", "") if todo_check else "",
+        })
+
+    blocker_count = sum(1 for item in findings if item.get("severity") in {"P0", "P1", "P2"})
+    lines = [f"Review dự án xong: {len(findings)} finding, {blocker_count} finding cần xử lý sớm."]
+    if not findings:
+        lines.append("Không thấy lỗi blocker trong compile, test, server, diff hoặc TODO scan.")
+    else:
+        for finding in findings:
+            lines.append(f"- {finding['severity']}: {finding['title']}")
+
+    return ComputerUseResult(
+        True,
+        blocker_count == 0,
+        "\n".join(lines),
+        "workspace_review",
+        {
+            "type": "workspace_review",
+            "root": str(_workspace_root()),
+            "findings": findings,
+            "checks": checks,
+            "summary": {
+                "findings": len(findings),
+                "blockers": blocker_count,
+                "checks": len(checks),
+            },
+        },
+    )
+
+
+def _workspace_list_files(command: str, plain: str) -> ComputerUseResult:
+    root = _workspace_root()
+    quoted = _extract_quoted_text(command)
+    filter_text = quoted or re.sub(r"^.*?(?:liet ke file|list files|tim file|find file)\s*", "", plain, flags=re.IGNORECASE).strip()
+    try:
+        completed = subprocess.run(
+            ["rg", "--files"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+        files = completed.stdout.splitlines()
+    except Exception:
+        files = [str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()]
+    if filter_text:
+        plain_filter = _plain_text(filter_text)
+        files = [name for name in files if plain_filter in _plain_text(name)]
+    files = sorted(files)[:200]
+    body = "\n".join(files) if files else "(không có file khớp)"
+    return ComputerUseResult(True, True, f"File trong workspace:\n{body}", "workspace_files", {"type": "workspace", "files": files})
+
+
+def _workspace_search_code(command: str, plain: str) -> ComputerUseResult:
+    pattern = _extract_quoted_text(command)
+    if not pattern:
+        pattern = re.sub(r"^.*?(?:tim code|search code)\s+", "", command, flags=re.IGNORECASE).strip()
+    if not pattern:
+        return ComputerUseResult(True, False, 'Anh dùng `tìm code "nội dung cần tìm"`.', "workspace_search")
+    root = _workspace_root()
+    try:
+        completed = subprocess.run(
+            ["rg", "-n", "--hidden", "-S", pattern],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+        )
+        output = completed.stdout.strip()
+        if completed.returncode == 1 and not output:
+            output = "(không có kết quả)"
+        elif completed.returncode not in (0, 1):
+            output = (completed.stderr or "").strip() or f"rg exit {completed.returncode}"
+    except Exception as exc:
+        output = f"Lỗi tìm code: {exc}"
+    return ComputerUseResult(True, True, f"Kết quả tìm code `{pattern}`:\n{_trim_output(output, 6000)}", "workspace_search", {"type": "workspace", "pattern": pattern})
+
+
+def _workspace_read_file(command: str, plain: str) -> ComputerUseResult:
+    target = _extract_quoted_text(command)
+    if not target:
+        target = re.sub(r"^.*?(?:doc file|read file)\s+", "", command, flags=re.IGNORECASE).strip()
+    try:
+        path = _resolve_workspace_path(target)
+        if not path.exists() or not path.is_file():
+            return ComputerUseResult(True, False, f"Không tìm thấy file: {path}", "workspace_read")
+        if path.stat().st_size > 2_000_000:
+            return ComputerUseResult(True, False, f"File quá lớn để đọc trực tiếp: {path}", "workspace_read")
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return ComputerUseResult(True, False, f"Không đọc được file: {exc}", "workspace_read")
+    return ComputerUseResult(True, True, f"{path}:\n{_trim_output(text, 8000)}", "workspace_read", {"type": "workspace", "path": str(path), "length": len(text)})
+
+
+def _workspace_replace_in_file(command: str, plain: str) -> ComputerUseResult:
+    values = _extract_all_quoted_text(command)
+    if len(values) < 3:
+        return ComputerUseResult(True, False, 'Anh dùng `thay trong file "path" "text cũ" "text mới"`.', "workspace_replace")
+    target, old, new = values[0], values[1], values[2]
+    try:
+        path = _resolve_workspace_path(target)
+        if not path.exists() or not path.is_file():
+            return ComputerUseResult(True, False, f"Không tìm thấy file: {path}", "workspace_replace")
+        if path.stat().st_size > 2_000_000:
+            return ComputerUseResult(True, False, f"File quá lớn để sửa bằng exact replace: {path}", "workspace_replace")
+        text = path.read_text(encoding="utf-8", errors="replace")
+        count = text.count(old)
+        if count == 0:
+            return ComputerUseResult(True, False, "Không tìm thấy text cũ trong file, chưa sửa gì.", "workspace_replace")
+        backup = _backup_file(path, text)
+        path.write_text(text.replace(old, new), encoding="utf-8")
+    except Exception as exc:
+        return ComputerUseResult(True, False, f"Không sửa được file: {exc}", "workspace_replace")
+    return ComputerUseResult(
+        True,
+        True,
+        f"Đã thay {count} chỗ trong file: {path}\nBackup: {backup}",
+        "workspace_replace",
+        {"type": "workspace", "path": str(path), "count": count, "backup": str(backup)},
+        risk_level="needs_approval",
+    )
+
+
+def _workspace_result(command: str, plain: str) -> ComputerUseResult | None:
+    if (
+        "xem diff" in plain
+        or "git diff" in plain
+        or "diff workspace" in plain
+        or "diff du an" in plain
+        or "xem thay doi code" in plain
+        or "xem thay doi du an" in plain
+    ):
+        return _workspace_current_diff()
+    if (
+        "review du an" in plain
+        or "review code" in plain
+        or "code review" in plain
+        or "kiem tra loi" in plain
+        or "soat du an" in plain
+        or "soat loi" in plain
+    ):
+        return _workspace_review()
+    if (
+        "kiem tra du an" in plain
+        or "kiem tra minion" in plain
+        or "diagnostics" in plain
+        or "codex check" in plain
+        or "chay test du an" in plain
+        or "test du an" in plain
+    ):
+        return _workspace_diagnostics()
+    if "liet ke file" in plain or "list files" in plain or "tim file" in plain or "find file" in plain:
+        return _workspace_list_files(command, plain)
+    if "tim code" in plain or "search code" in plain:
+        return _workspace_search_code(command, plain)
+    if "doc file" in plain or "read file" in plain:
+        return _workspace_read_file(command, plain)
+    if "thay trong file" in plain or "replace in file" in plain:
+        return _workspace_replace_in_file(command, plain)
+    if "workspace" in plain or "git status" in plain or "trang thai workspace" in plain:
+        return _workspace_status()
+    return None
+
+
+def workspace_status_result() -> ComputerUseResult:
+    return _workspace_status()
+
+
+def workspace_diagnostics_result() -> ComputerUseResult:
+    return _workspace_diagnostics()
+
+
+def workspace_review_result() -> ComputerUseResult:
+    return _workspace_review()
+
+
+def workspace_current_diff_result() -> ComputerUseResult:
+    return _workspace_current_diff()
+
+
+def workspace_list_files_result(query: str = "") -> ComputerUseResult:
+    command = f'liet ke file "{query}"' if query else "liet ke file"
+    return _workspace_list_files(command, _plain_text(command))
+
+
+def workspace_search_result(pattern: str) -> ComputerUseResult:
+    command = f'tim code "{pattern}"'
+    return _workspace_search_code(command, _plain_text(command))
+
+
+def workspace_read_result(path: str) -> ComputerUseResult:
+    command = f'doc file "{path}"'
+    return _workspace_read_file(command, _plain_text(command))
+
+
+def workspace_patch_result(
+    path_text: str,
+    old: str,
+    new: str,
+    apply: bool = False,
+    approval_token: str | None = None,
+) -> ComputerUseResult:
+    try:
+        path = _resolve_workspace_path(path_text)
+        if not path.exists() or not path.is_file():
+            return ComputerUseResult(True, False, f"Không tìm thấy file: {path}", "workspace_patch")
+        if path.stat().st_size > 2_000_000:
+            return ComputerUseResult(True, False, f"File quá lớn để patch trực tiếp: {path}", "workspace_patch")
+        updated, count, diff = _workspace_replace_preview(path, old, new)
+        if count == 0:
+            return ComputerUseResult(True, False, "Không tìm thấy text cũ trong file, chưa sửa gì.", "workspace_patch")
+    except Exception as exc:
+        return ComputerUseResult(True, False, f"Không chuẩn bị patch được: {exc}", "workspace_patch")
+
+    data = {
+        "type": "workspace_diff",
+        "path": str(path),
+        "count": count,
+        "diff": diff,
+        "apply": apply,
+    }
+    if not apply:
+        return ComputerUseResult(
+            True,
+            True,
+            f"Diff preview cho {path} ({count} chỗ):\n{diff}",
+            "workspace_diff",
+            data,
+        )
+
+    command_key = _workspace_patch_key(path, old, new)
+    if not _consume_approval(command_key, approval_token):
+        result = _approval_result(command_key, "workspace_patch", "needs_approval", "áp dụng patch sửa file trong workspace")
+        result.data.update({"path": str(path), "diff": diff, "count": count})
+        return result
+
+    try:
+        original = path.read_text(encoding="utf-8", errors="replace")
+        backup = _backup_file(path, original)
+        path.write_text(updated, encoding="utf-8")
+    except Exception as exc:
+        return ComputerUseResult(True, False, f"Không áp dụng patch được: {exc}", "workspace_patch", data)
+
+    data["backup"] = str(backup)
+    return ComputerUseResult(
+        True,
+        True,
+        f"Đã áp dụng patch {count} chỗ trong file: {path}\nBackup: {backup}",
+        "workspace_patch",
+        data,
+        risk_level="needs_approval",
+    )
+
+
+def workspace_run_command_result(command: str, approval_token: str | None = None) -> ComputerUseResult:
+    command = (command or "").strip()
+    if not command:
+        return ComputerUseResult(True, False, "Thiếu lệnh cần chạy.", "workspace_run")
+    if _dangerous_shell_text(command):
+        return ComputerUseResult(
+            True,
+            False,
+            "Lệnh thuộc nhóm nguy hiểm, Minion không tự chạy.",
+            "workspace_run",
+            {"type": "workspace_run", "command": command},
+            risk_level="blocked",
+        )
+
+    command_key = "workspace_run:" + hashlib.sha256(command.encode("utf-8")).hexdigest()
+    if not _consume_approval(command_key, approval_token):
+        result = _approval_result(command_key, "workspace_run", "needs_approval", "chạy lệnh trong workspace")
+        result.data.update({"command": command})
+        return result
+
+    root = _workspace_root()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=root,
+            shell=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_command_timeout(),
+        )
+        output = (completed.stdout or "").strip()
+        error = (completed.stderr or "").strip()
+        combined = "\n".join(part for part in [output, error] if part).strip() or "(không có output)"
+        combined = _trim_output(combined, 12000)
+        ok = completed.returncode == 0
+        return ComputerUseResult(
+            True,
+            ok,
+            f"Đã chạy lệnh trong workspace, exit code {completed.returncode}:\n{combined}",
+            "workspace_run",
+            {
+                "type": "workspace_run",
+                "command": command,
+                "cwd": str(root),
+                "returncode": completed.returncode,
+                "output": combined,
+            },
+            risk_level="needs_approval",
+        )
+    except subprocess.TimeoutExpired:
+        return ComputerUseResult(
+            True,
+            False,
+            f"Lệnh quá thời gian {_command_timeout()} giây, Minion đã dừng chờ.",
+            "workspace_run",
+            {"type": "workspace_run", "command": command, "cwd": str(root), "timeout": _command_timeout()},
+            risk_level="needs_approval",
+        )
+    except Exception as exc:
+        return ComputerUseResult(True, False, f"Không chạy được lệnh: {exc}", "workspace_run", {"command": command})
+
+
 def _open_file_or_folder(command: str) -> ComputerUseResult | None:
     target = _extract_quoted_text(command)
     if not target:
@@ -1103,7 +2031,7 @@ def _run_shell_command(command: str, plain: str) -> ComputerUseResult | None:
         shell=True,
         capture_output=True,
         text=True,
-        timeout=20,
+        timeout=_command_timeout(),
         encoding="utf-8",
         errors="replace",
     )
@@ -1121,6 +2049,134 @@ def _run_shell_command(command: str, plain: str) -> ComputerUseResult | None:
         f"Đã chạy lệnh, exit code {completed.returncode}:\n{combined}",
         "shell",
         {"returncode": completed.returncode},
+        risk_level="needs_approval",
+    )
+
+
+def _strip_trailing_action_words(query: str) -> str:
+    query = re.sub(
+        r"\s+(?:và|va)\s+(?:bật|bat|phát|phat|play|mở|mo)\s+(?:lên|len|luôn|luon|ngay|bài|bai).*$",
+        "",
+        query,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    query = re.sub(
+        r"\s+(?:bật|bat|phát|phat|play)\s+(?:lên|len|luôn|luon|ngay)\s*$",
+        "",
+        query,
+        flags=re.IGNORECASE,
+    )
+    return query.strip(" .,!?:;-")
+
+
+def _extract_original_query(command: str, marker_pattern: str) -> str:
+    quoted = _extract_quoted_text(command)
+    if quoted:
+        return quoted.strip()
+    match = re.search(marker_pattern, command, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    query = match.group(1).strip()
+    return _strip_trailing_action_words(query)
+
+
+def _youtube_query(command: str) -> str:
+    query = _extract_original_query(
+        command,
+        r"(?:tìm\s+youtube|tim\s+youtube|mở\s+youtube|mo\s+youtube|youtube)\s*(?:bài|bai|video|nhạc|nhac)?\s+(.+)$",
+    )
+    if query:
+        return query
+    query = _extract_original_query(
+        command,
+        r"(?:mở|mo|bật|bat|phát|phat|play)\s+(?:bài|bai|nhạc|nhac|video)?\s*(.+?)\s+(?:trên|tren|ở|o)\s+youtube",
+    )
+    return query
+
+
+def _wants_youtube_autoplay(plain: str) -> bool:
+    if re.search(r"(?:mo|bat|phat)\s+youtube\s+(?:bai|nhac|video)\b", plain):
+        return True
+    return any(
+        phrase in plain
+        for phrase in [
+            "bat len",
+            "bat luon",
+            "phat",
+            "play",
+            "mo luon",
+            "mo bai",
+            "bat bai",
+        ]
+    )
+
+
+def _resolve_youtube_first_video_url(query: str) -> str | None:
+    if not query:
+        return None
+    search_url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
+    try:
+        request = urllib.request.Request(
+            search_url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
+                )
+            },
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            body = response.read(2_000_000).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    video_ids = re.findall(r'"videoId":"([A-Za-z0-9_-]{11})"', body)
+    if not video_ids:
+        video_ids = re.findall(r"/watch\?v=([A-Za-z0-9_-]{11})", html.unescape(body))
+    seen = set()
+    for video_id in video_ids:
+        if video_id in seen:
+            continue
+        seen.add(video_id)
+        return "https://www.youtube.com/watch?v=" + video_id
+    return None
+
+
+def _youtube_result(command: str, plain: str) -> ComputerUseResult | None:
+    if "youtube" not in plain:
+        return None
+    query = _youtube_query(command)
+    if not query:
+        webbrowser.open("https://www.youtube.com")
+        return ComputerUseResult(True, True, "Đã mở YouTube.", "open_url", {"url": "https://www.youtube.com"})
+
+    search_url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
+    if _wants_youtube_autoplay(plain):
+        video_url = _resolve_youtube_first_video_url(query)
+        if video_url:
+            webbrowser.open(video_url)
+            return ComputerUseResult(
+                True,
+                True,
+                f"Đã mở YouTube và phát: {query}",
+                "youtube_play",
+                {"type": "youtube", "query": query, "url": video_url},
+            )
+
+    webbrowser.open(search_url)
+    return ComputerUseResult(
+        True,
+        True,
+        f"Đã tìm YouTube: {query}",
+        "youtube_search",
+        {"type": "youtube", "query": query, "url": search_url},
+    )
+
+
+def _google_query(command: str) -> str:
+    return _extract_original_query(
+        command,
+        r"(?:tìm\s+kiếm|tim\s+kiem|tìm\s+google|tim\s+google|search|google)\s+(.+)$",
     )
 
 
@@ -1273,19 +2329,15 @@ def _open_target(command: str, plain: str) -> ComputerUseResult:
         webbrowser.open(url)
         return ComputerUseResult(True, True, f"Đã mở link: {url}", "open_url")
 
-    search_match = re.search(r"(?:tim kiem|tim google|search|google)\s+(.+)$", plain)
-    if search_match and search_match.group(1).strip() not in {"google", "youtube"}:
-        query = search_match.group(1).strip()
+    youtube_result = _youtube_result(command, plain)
+    if youtube_result is not None:
+        return youtube_result
+
+    query = _google_query(command)
+    if query and _plain_text(query) not in {"google", "youtube"}:
         url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(query)
         webbrowser.open(url)
         return ComputerUseResult(True, True, f"Đã tìm Google: {query}", "search", {"query": query, "url": url})
-
-    youtube_match = re.search(r"(?:tim youtube|youtube)\s+(.+)$", plain)
-    if youtube_match and youtube_match.group(1).strip() != "youtube":
-        query = youtube_match.group(1).strip()
-        url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
-        webbrowser.open(url)
-        return ComputerUseResult(True, True, f"Đã tìm YouTube: {query}", "search", {"query": query, "url": url})
 
     named = _open_named_app(plain)
     if named is not None:
@@ -1313,93 +2365,6 @@ def _open_target(command: str, plain: str) -> ComputerUseResult:
     return ComputerUseResult(True, False, "Anh muốn mở app/link nào? Ví dụ: `mở notepad`, `mở facebook`, `mở https://google.com`.", "open")
 
 
-# Từ đệm cắt ở ĐẦU câu (đã bỏ dấu). Chỉ cắt ở đầu/cuối, không cắt giữa tên bài.
-# Bộ rộng: dùng khi không có chữ 'youtube' (vd 'bật bài X'), cắt cả động từ mở/bật/nghe.
-_YT_LEAD_BROAD = {
-    "ban", "minion", "oi", "hay", "lam", "on", "vui", "long", "giup", "gium", "dum",
-    "mo", "bat", "phat", "nghe", "play", "choi", "cho", "toi", "minh", "muon",
-    "video", "clip", "nhac", "bai", "hat", "ca", "khuc", "ten", "mv",
-}
-# Bộ hẹp: dùng sau chữ 'youtube', chỉ bỏ các từ chắc chắn không phải tên bài.
-_YT_LEAD_NARROW = {"video", "clip", "nhac", "bai", "hat", "ca", "khuc", "ten", "mv"}
-# Từ đệm cắt ở CUỐI câu. Không gồm anh/em/minh để khỏi cắt nhầm tên bài (vd 'Cho Anh').
-_YT_TRAIL = {
-    "cho", "toi", "nhe", "nha", "a", "di", "voi", "luon", "ngay", "gio",
-    "hay", "bat", "mo", "phat", "play", "len", "choi", "gium", "dum", "giup",
-    "roi", "duoc", "oi", "va", "gium", "dum",
-}
-
-
-def _extract_youtube_query(command: str) -> str:
-    """Lấy tên bài hát / từ khoá từ câu kiểu 'bạn mở youtube bài X của Y cho tôi nhé'."""
-    words = command.split()
-    start = 0
-    has_yt = False
-    for i, w in enumerate(words):
-        if "youtube" in _plain_text(w):
-            start = i + 1
-            has_yt = True
-            break
-    rest = [w.strip(".,!?") for w in words[start:] if w.strip(".,!?")]
-    lead = _YT_LEAD_NARROW if has_yt else _YT_LEAD_BROAD
-    while rest and _plain_text(rest[0]) in lead:
-        rest.pop(0)
-    # Cắt từ đệm ở cuối: lặp giữa từ đơn và cụm 'cho + đại từ' (cho tôi/cho mình...).
-    pronouns = {"toi", "minh", "em", "ban", "chung toi", "chung minh"}
-    changed = True
-    while changed and rest:
-        changed = False
-        while rest and _plain_text(rest[-1]) in _YT_TRAIL:
-            rest.pop()
-            changed = True
-        if len(rest) >= 2 and _plain_text(rest[-1]) in pronouns and _plain_text(rest[-2]) == "cho":
-            rest.pop()
-            rest.pop()
-            changed = True
-    return " ".join(rest).strip()
-
-
-def _youtube_first_video_id(query: str) -> str | None:
-    """Lấy videoId của kết quả đầu tiên trên YouTube (không cần API key)."""
-    url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept-Language": "vi,en;q=0.9",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        html = resp.read().decode("utf-8", "replace")
-    match = re.search(r'"videoId":"([A-Za-z0-9_-]{11})"', html)
-    return match.group(1) if match else None
-
-
-def _open_youtube(query: str, autoplay: bool) -> ComputerUseResult:
-    query = (query or "").strip()
-    if not query:
-        webbrowser.open("https://www.youtube.com")
-        return ComputerUseResult(True, True, "Đã mở YouTube.", "open_url", {"url": "https://www.youtube.com"})
-
-    if autoplay:
-        try:
-            video_id = _youtube_first_video_id(query)
-        except Exception:
-            video_id = None
-        if video_id:
-            url = f"https://www.youtube.com/watch?v={video_id}"
-            webbrowser.open(url)
-            return ComputerUseResult(
-                True, True, f"Đã mở YouTube và bật: {query}", "open_url",
-                {"query": query, "url": url, "video_id": video_id},
-            )
-
-    url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
-    webbrowser.open(url)
-    note = " (chưa tự phát được, anh bấm video đầu tiên nhé)" if autoplay else ""
-    return ComputerUseResult(True, True, f"Đã tìm YouTube: {query}{note}", "search", {"query": query, "url": url})
-
-
 def _screenshot() -> ComputerUseResult:
     try:
         from PIL import ImageGrab
@@ -1411,25 +2376,30 @@ def _screenshot() -> ComputerUseResult:
             "screenshot",
         )
 
-    out_dir = Path("output") / "computer-use"
+    screenshot_dir = str(_minion_config().get("screenshot_dir") or "output/computer-use")
+    out_dir = Path(screenshot_dir)
+    if not out_dir.is_absolute():
+        out_dir = _REPO_ROOT / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"screenshot-{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
     image = ImageGrab.grab()
     image.save(path)
     width, height = image.size
     filename = path.name
+    artifact = {
+        "type": "screenshot",
+        "url": f"/api/computer-use/files/{filename}",
+        "path": str(path.resolve()),
+        "width": width,
+        "height": height,
+    }
     return ComputerUseResult(
         True,
         True,
         f"Đã chụp màn hình {width}x{height}. Anh có thể dùng tọa độ trên ảnh để bảo Minion click hoặc kéo chuột.",
         "screenshot",
-        {
-            "type": "screenshot",
-            "url": f"/api/computer-use/files/{filename}",
-            "path": str(path.resolve()),
-            "width": width,
-            "height": height,
-        },
+        artifact,
+        artifacts=[artifact],
     )
 
 
@@ -1446,9 +2416,16 @@ def get_computer_state() -> dict:
 
 def _split_sequence(command: str) -> list[str]:
     """Tách chuỗi thao tác đơn giản, tránh tách khi không có dấu hiệu nhiều bước."""
-    if not re.search(r"[;\n]|(\s+(rồi|roi|sau đó|sau do)\s+)", command, flags=re.IGNORECASE):
+    separator = (
+        r"[;\n]+"
+        r"|\s+(?:rồi|roi|sau đó|sau do)\s+"
+        r"|[.!?]\s+(?=(?:hãy\s+)?(?:minion\s+)?"
+        r"(?:mở|mo|bật|bat|phát|phat|tăng|tang|giảm|giam|đặt|dat|chạy|chay|click|gõ|go|nhập|nhap|youtube|google|volume|âm lượng|am luong)\b)"
+        r"|\s+(?:và|va)\s+(?=(?:mở|mo|tăng|tang|giảm|giam|bật|bat)\s+(?:âm lượng|am luong|volume))"
+    )
+    if not re.search(separator, command, flags=re.IGNORECASE):
         return [command]
-    parts = re.split(r"[;\n]+|\s+(?:rồi|roi|sau đó|sau do)\s+", command, flags=re.IGNORECASE)
+    parts = re.split(separator, command, flags=re.IGNORECASE)
     return [part.strip() for part in parts if part.strip()]
 
 
@@ -1482,8 +2459,24 @@ def _task_steps(task: str) -> list[str]:
     return [cleaned]
 
 
-def run_agent_task(task: str, enabled: bool, max_steps: int = 8) -> ComputerUseResult | None:
-    """Chạy task nhiều bước có log và ảnh màn hình cuối."""
+def plan_agent_steps(task: str, max_steps: int | None = None) -> list[str]:
+    configured_max = int(_minion_config().get("max_agent_steps", 8) or 8)
+    max_steps = max(1, min(int(max_steps or configured_max), 20))
+    return [step for step in _task_steps(task) if step][:max_steps]
+
+
+def screenshot_result() -> ComputerUseResult:
+    return _screenshot()
+
+
+def run_agent_task(
+    task: str,
+    enabled: bool,
+    max_steps: int | None = None,
+    approval_token: str | None = None,
+    _approved: bool = False,
+) -> ComputerUseResult | None:
+    """Chạy task nhiều bước có observe -> act -> verify ở mức local."""
     plain = _plain_text(task)
     if not re.match(r"^(?:minion\s+)?(?:tu lam|auto lam|agent|cowork)\b", plain):
         return None
@@ -1496,27 +2489,37 @@ def run_agent_task(task: str, enabled: bool, max_steps: int = 8) -> ComputerUseR
             "agent_disabled",
         )
 
-    steps = [step for step in _task_steps(task) if step][:max_steps]
+    steps = plan_agent_steps(task, max_steps)
     if not steps:
         return ComputerUseResult(True, False, "Anh cần ghi rõ task muốn Minion tự làm.", "agent_run")
 
     logs = []
     ok = True
+    observation = get_computer_state()
     for index, step in enumerate(steps, start=1):
-        result = execute_computer_command(step, True, _depth=1)
+        result = execute_computer_command(step, True, _depth=1, approval_token=approval_token, _approved=_approved)
         if result is None:
             result = ComputerUseResult(True, False, f"Chưa hiểu bước: {step}", "unknown")
+        step_shot = _screenshot()
         logs.append({
             "index": index,
             "instruction": step,
             "ok": result.ok,
             "action": result.action,
             "message": result.message,
+            "risk_level": result.risk_level,
+            "needs_approval": result.needs_approval,
+            "approval_id": result.approval_id,
+            "data": result.data,
+            "screenshot": step_shot.data if step_shot.ok else None,
         })
         ok = ok and result.ok
+        if result.needs_approval or result.risk_level == "blocked":
+            break
         time.sleep(0.4)
 
     shot = _screenshot()
+    status = "completed" if ok else "needs_attention"
     summary_lines = [
         "Minion đã chạy task nhiều bước:",
         *[f"{item['index']}. {item['instruction']} -> {item['message']}" for item in logs],
@@ -1529,14 +2532,23 @@ def run_agent_task(task: str, enabled: bool, max_steps: int = 8) -> ComputerUseR
         "agent_run",
         {
             "type": "agent_run",
+            "status": status,
             "ok": ok,
+            "observation": observation,
+            "plan": steps,
             "steps": logs,
             "screenshot": shot.data,
         },
     )
 
 
-def execute_computer_command(command: str, enabled: bool, _depth: int = 0) -> ComputerUseResult | None:
+def execute_computer_command(
+    command: str,
+    enabled: bool,
+    _depth: int = 0,
+    approval_token: str | None = None,
+    _approved: bool = False,
+) -> ComputerUseResult | None:
     """Parse và chạy lệnh computer-use đơn giản từ câu tiếng Việt."""
     plain = _plain_text(command)
     if not _looks_like_computer_command(plain):
@@ -1551,8 +2563,23 @@ def execute_computer_command(command: str, enabled: bool, _depth: int = 0) -> Co
         )
 
     try:
+        action_hint, risk_level, reason = _classify_command_risk(command, plain)
+        command_key = _approval_key(command)
+        approved = _approved or _consume_approval(command_key, approval_token)
+        if risk_level == "blocked":
+            return ComputerUseResult(
+                True,
+                False,
+                reason,
+                action_hint or "blocked",
+                {"type": "risk_block", "command": command, "reason": reason},
+                risk_level="blocked",
+            )
+        if risk_level == "needs_approval" and not approved:
+            return _approval_result(command, action_hint, risk_level, reason)
+
         if _depth == 0:
-            agent_result = run_agent_task(command, enabled)
+            agent_result = run_agent_task(command, enabled, approval_token=approval_token, _approved=approved)
             if agent_result is not None:
                 return agent_result
 
@@ -1562,12 +2589,14 @@ def execute_computer_command(command: str, enabled: bool, _depth: int = 0) -> Co
             overall_ok = True
             actions = []
             for index, part in enumerate(parts, start=1):
-                result = execute_computer_command(part, True, _depth=1)
+                result = execute_computer_command(part, True, _depth=1, _approved=approved)
                 if result is None:
                     result = ComputerUseResult(True, False, f"Chưa hiểu bước {index}: {part}", "unknown")
                 messages.append(f"{index}. {result.message}")
                 actions.append(result.action)
                 overall_ok = overall_ok and result.ok
+                if result.needs_approval or result.risk_level == "blocked":
+                    break
                 time.sleep(0.35)
             return ComputerUseResult(True, overall_ok, "\n".join(messages), "sequence", {"actions": actions})
 
@@ -1577,15 +2606,9 @@ def execute_computer_command(command: str, enabled: bool, _depth: int = 0) -> Co
             time.sleep(seconds)
             return ComputerUseResult(True, True, f"Đã đợi {seconds} giây.", "wait", {"seconds": seconds})
 
-        if "youtube" in plain or any(k in plain for k in (
-            "nghe nhac", "mo nhac", "bat nhac", "phat nhac",
-            "bat bai", "phat bai", "nghe bai", "mo bai hat",
-        )):
-            autoplay = any(k in plain for k in (
-                "bat", "phat", "nghe", "play", "choi", "len luon", "mo len",
-            ))
-            query = _extract_youtube_query(command)
-            return _open_youtube(query, autoplay)
+        workspace_result = _workspace_result(command, plain)
+        if workspace_result is not None:
+            return workspace_result
 
         shell_result = _run_shell_command(command, plain)
         if shell_result is not None:
@@ -1707,9 +2730,13 @@ def execute_computer_command(command: str, enabled: bool, _depth: int = 0) -> Co
         if "chup man hinh" in plain or "xem man hinh" in plain:
             return _screenshot()
 
+        volume_result = _set_volume_result(command, plain)
+        if volume_result is not None:
+            return volume_result
+
         if re.match(
             r"^(?:(?:hay|ban|minion|oi|lam on|vui long|giup|gium|dum)\s+)*"
-            r"(?:mo|khoi dong|khoi chay|truy cap)\b",
+            r"(?:mo(?!\s+(?:ta|hinh|phong|uoc|mong|ho)\b)|khoi dong|khoi chay|truy cap)\b",
             plain,
         ) or "mo link" in plain or "mo trang" in plain:
             return _open_target(command, plain)
@@ -1778,7 +2805,7 @@ def execute_computer_command(command: str, enabled: bool, _depth: int = 0) -> Co
         return ComputerUseResult(
             True,
             False,
-            "Em chưa hiểu thao tác máy này. Anh có thể dùng: `mở notepad`, `vị trí chuột`, `di chuyển chuột tới 500 300`, `click`, `gõ \"nội dung\"`, `bấm phím ctrl+l`.",
+            "Em chưa hiểu thao tác máy này. Anh có thể dùng: `mở notepad`, `vị trí chuột`, `di chuyển chuột tới 500 300`, `click`, `gõ \"nội dung\"`, `bấm phím ctrl+l`, `kiểm tra dự án`.",
             "unknown",
         )
     except Exception as exc:

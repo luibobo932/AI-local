@@ -90,30 +90,29 @@ $desktopCandidates = @(
     [Environment]::GetFolderPath("CommonDesktopDirectory")
 ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
 
+$shortcutName = "M" + [char]0x1EDF + " Minion.lnk"
+
 $shell = New-Object -ComObject WScript.Shell
 foreach ($desktop in $desktopCandidates) {
-    $shortcutPath = Join-Path $desktop "Minion Chat Local.lnk"
-    $desktopLauncherPath = Join-Path $desktop "MinionChatLocal-launch.ps1"
-    $desktopIconPath = Join-Path $desktop "MinionChatLocal.ico"
+    $shortcutPath = Join-Path $desktop $shortcutName
+    $tempShortcutPath = Join-Path $desktop "Mo Minion.tmp.lnk"
     try {
-        Copy-Item -LiteralPath $iconPath -Destination $desktopIconPath -Force
-        @(
-            '$ErrorActionPreference = "Stop"'
-            '$projectDir = "' + $projectDir.Replace('"', '""') + '"'
-            '$desktopAppPath = Join-Path $projectDir "start_minion_desktop.ps1"'
-            '$ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"'
-            'Start-Process -FilePath $ps -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $desktopAppPath) -WindowStyle Hidden'
-        ) | Set-Content -LiteralPath $desktopLauncherPath -Encoding UTF8
+        Remove-Item -LiteralPath $tempShortcutPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $shortcutPath -Force -ErrorAction SilentlyContinue
 
-        $shortcut = $shell.CreateShortcut($shortcutPath)
+        # WScript.Shell on Windows PowerShell can fail when saving a .lnk
+        # directly to a Unicode path. Save ASCII first, then rename.
+        $shortcut = $shell.CreateShortcut($tempShortcutPath)
         $shortcut.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-        $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$desktopLauncherPath`""
-        $shortcut.WorkingDirectory = $desktop
+        $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$desktopAppPath`""
+        $shortcut.WorkingDirectory = $projectDir
         $shortcut.Description = "Mo giao dien Minion Chat local"
-        $shortcut.IconLocation = "$desktopIconPath,0"
+        $shortcut.IconLocation = "$iconPath,0"
         $shortcut.Save()
+        Rename-Item -LiteralPath $tempShortcutPath -NewName $shortcutName -Force
         Write-Host "Da tao shortcut: $shortcutPath"
     } catch {
+        Remove-Item -LiteralPath $tempShortcutPath -Force -ErrorAction SilentlyContinue
         Write-Host "Bo qua vi tri khong co quyen ghi: $shortcutPath"
     }
 }
