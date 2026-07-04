@@ -168,3 +168,33 @@ python app.py                     # Gradio UI (share=True cho link công khai)
 - Char-level vocab build từ corpus + `CHAR_COVERAGE` (đảm bảo phủ đủ ký tự cho SFT).
 - Template chat: `"Human: {q}\n\nAssistant: {r}"`.
 - Model nhỏ → nên decode **greedy (top_k=1)** để ổn định; sampling dễ lạc.
+
+---
+
+## 9. Minion desktop cowork update
+
+Minion đã được nâng từ chatbot local thành desktop cowork bước đầu.
+
+### Runtime
+
+```bash
+python server.py --port 11435
+```
+
+UI: `http://localhost:11435`
+
+### Năng lực mới
+
+- `computer_use.py` có phân loại rủi ro: `safe`, `needs_approval`, `blocked`.
+- `/api/computer-use/command` trả response chuẩn gồm `ok`, `action`, `risk_level`, `needs_approval`, `approval_id`, `artifacts`, `data`.
+- `/api/agent/run` chạy task nhiều bước nền theo `observe -> plan -> act -> verify`, có log từng bước và screenshot.
+- `/api/agent/runs/{id}` đọc trạng thái; `/stop`, `/pause`, `/resume` điều khiển run.
+- `/api/workspace/*` hỗ trợ status, list/search/read, diff/patch exact replace, run command trong workspace.
+- `minion.config.json` quản lý permission mode, root workspace được phép, timeout, số bước agent tối đa.
+
+### Guardrail
+
+- Shell command, sửa file, ghi clipboard, đóng cửa sổ đều cần xác nhận một lần.
+- Lệnh nguy hiểm như `git reset --hard`, `git clean -f`, `rm -rf`, `Remove-Item -Recurse`, `shutdown`, `format`, `diskpart` bị chặn.
+- File patch tạo backup trong `output/minion-backups` trước khi ghi.
+- Clipboard trên Windows vẫn là best-effort vì phiên OS có thể chặn `OpenClipboard`.

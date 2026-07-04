@@ -79,6 +79,32 @@
   }
   .status-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #334155; }
   .pulse { width: 9px; height: 9px; border-radius: 50%; background: #28b463; box-shadow: 0 0 0 5px rgba(40,180,99,.14); }
+  .status-kv {
+    margin-top: 10px;
+    display: grid;
+    gap: 6px;
+    font-size: 12px;
+    color: #42526a;
+  }
+  .status-kv div {
+    display: grid;
+    grid-template-columns: 78px 1fr;
+    gap: 8px;
+  }
+  .status-kv strong { color: #1f2630; font-weight: 700; }
+
+  .tool-title { color: #dbeafe; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+  .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tool-btn {
+    min-height: 38px;
+    border: 1px solid rgba(255,255,255,.2);
+    background: rgba(255,255,255,.13);
+    color: #fff;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .tool-btn:hover { background: rgba(255,255,255,.22); }
 
   .quick-title { margin-top: auto; color: #dbeafe; font-size: 12px; font-weight: 700; text-transform: uppercase; }
   .chips { display: grid; gap: 9px; }
@@ -120,6 +146,17 @@
   .title-group h2 { font-size: 17px; line-height: 1.1; }
   .title-group p { font-size: 12px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .toolbar { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .stop-btn {
+    height: 38px;
+    border: 1px solid #c94a4a;
+    background: #fff1f1;
+    color: #9b1c1c;
+    border-radius: 8px;
+    padding: 0 11px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .stop-btn:disabled { opacity: .45; cursor: not-allowed; }
   .cu-toggle {
     height: 38px;
     display: inline-flex;
@@ -265,6 +302,58 @@
     white-space: normal;
   }
   .computer-step strong { color: var(--denim-2); }
+  .computer-result-block {
+    max-height: 320px;
+    overflow: auto;
+    margin-top: 10px;
+    border: 1px solid rgba(31,38,48,.12);
+    border-radius: 8px;
+    background: rgba(255,255,255,.6);
+    padding: 10px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+  }
+  .approval-card {
+    border: 1px solid #d99a20;
+    background: #fff7d6;
+    border-radius: 8px;
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .approval-card button {
+    width: fit-content;
+    border: 0;
+    border-radius: 8px;
+    background: var(--denim);
+    color: #fff;
+    padding: 8px 11px;
+    cursor: pointer;
+  }
+  .status-drawer {
+    border-bottom: 1px solid rgba(31,38,48,.12);
+    background: rgba(255,250,240,.96);
+    padding: 12px 18px;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    font-size: 12px;
+  }
+  .status-drawer[hidden] { display: none; }
+  .drawer-item {
+    min-width: 0;
+    color: var(--muted);
+  }
+  .drawer-item strong {
+    display: block;
+    color: var(--ink);
+    margin-bottom: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .ui-tree-list {
     display: grid;
     gap: 6px;
@@ -287,7 +376,7 @@
     border-top: 1px solid rgba(31, 38, 48, .12);
     padding: 15px 18px 17px;
   }
-  .inputbar { display: grid; grid-template-columns: 1fr 48px; gap: 10px; align-items: end; }
+  .inputbar { display: grid; grid-template-columns: 1fr 48px 48px; gap: 10px; align-items: end; }
   textarea {
     width: 100%;
     max-height: 150px;
@@ -313,72 +402,20 @@
   }
   #send:hover { background: var(--denim-2); }
   #send:disabled { opacity: .45; cursor: not-allowed; }
-  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; text-align: center; }
-
-  /* Agent mode */
-  .agent-steps { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
-  .agent-step {
-    border: 1px solid rgba(47,111,179,.2);
-    border-radius: 8px;
-    overflow: hidden;
-    font-size: 13px;
-  }
-  .agent-step-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 11px;
-    background: rgba(47,111,179,.07);
+  #stopChat {
+    width: 48px;
+    height: 48px;
+    border: 1px solid #d58a8a;
+    border-radius: 10px;
+    background: #fff1f1;
+    color: #9b1c1c;
     cursor: pointer;
-    user-select: none;
+    font-size: 18px;
+    font-weight: 700;
   }
-  .agent-step-header:hover { background: rgba(47,111,179,.12); }
-  .agent-step-icon { font-size: 15px; }
-  .agent-step-title { font-weight: 600; color: var(--denim-2); flex: 1; }
-  .agent-step-toggle { color: var(--muted); font-size: 11px; }
-  .agent-step-body {
-    padding: 8px 11px;
-    border-top: 1px solid rgba(47,111,179,.15);
-    display: none;
-  }
-  .agent-step-body.open { display: block; }
-  .agent-thought { color: #555; margin-bottom: 6px; font-style: italic; }
-  .agent-tool-call {
-    background: #f0f4ff;
-    border: 1px solid #c5d3f7;
-    border-radius: 6px;
-    padding: 6px 10px;
-    margin: 4px 0;
-    font-family: monospace;
-    font-size: 12px;
-  }
-  .agent-tool-name { color: var(--denim); font-weight: 700; }
-  .agent-tool-args { color: #444; word-break: break-all; }
-  .agent-tool-result {
-    background: #f9fafb;
-    border-left: 3px solid #28b463;
-    padding: 4px 8px;
-    margin-top: 4px;
-    font-size: 12px;
-    white-space: pre-wrap;
-    word-break: break-all;
-    max-height: 200px;
-    overflow-y: auto;
-    color: #333;
-  }
-  .agent-answer-label {
-    font-size: 12px;
-    color: var(--muted);
-    margin-bottom: 4px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-  }
-  .agent-meta {
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 6px;
-  }
+  #stopChat:hover { background: #ffe1e1; }
+  #stopChat:disabled { opacity: .42; cursor: not-allowed; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; text-align: center; }
 
   @media (max-width: 820px) {
     body { padding: 0; }
@@ -388,6 +425,7 @@
     .toolbar { width: 100%; margin-left: 0; }
     .cu-toggle { flex: 1 1 100%; justify-content: center; }
     select { flex: 1; min-width: 0; }
+    .status-drawer { grid-template-columns: 1fr; padding: 10px 12px; }
     #chat { padding: 14px 12px; }
     .bubble { max-width: calc(100vw - 70px); font-size: 14.5px; }
     footer { padding: 12px; }
@@ -409,7 +447,15 @@
 
       <div class="status-card">
         <div class="status-line"><span class="pulse"></span><span>Đang chạy trên máy của anh</span></div>
+        <div class="status-kv" id="sideStatus">
+          <div><strong>Quyền</strong><span>Hỏi khi rủi ro</span></div>
+          <div><strong>Cửa sổ</strong><span id="sideActiveWindow">Đang đọc...</span></div>
+          <div><strong>Chuột</strong><span id="sideCursor">-</span></div>
+        </div>
       </div>
+
+      <div class="tool-title">Công cụ</div>
+      <div class="tool-grid" id="toolButtons"></div>
 
       <div class="quick-title">Câu hỏi nhanh</div>
       <div class="chips" id="chips"></div>
@@ -423,22 +469,23 @@
           <p>Hỏi nhanh về nhà phố, lọc căn theo quận, giá, ngang, diện tích.</p>
         </div>
         <div class="toolbar">
-          <label class="cu-toggle" id="agentToggle">
-            <input id="agentEnabled" type="checkbox">
-            <span>🤖 Agent</span>
-          </label>
-          <label class="cu-toggle" id="planToggle" title="Chế độ chỉ-đọc: agent lập kế hoạch, không sửa file">
-            <input id="planEnabled" type="checkbox">
-            <span>📋 Plan</span>
-          </label>
+          <button class="ghost-btn" id="statusBtn" type="button">Trạng thái</button>
+          <button class="stop-btn" id="stopAgent" type="button" disabled>Dừng</button>
           <label class="cu-toggle" id="computerUseToggle">
             <input id="computerUseEnabled" type="checkbox">
-            <span>🖥 Điều khiển máy</span>
+            <span>Điều khiển máy</span>
           </label>
           <select id="model" aria-label="Chọn model"></select>
           <button class="ghost-btn" id="clear" type="button">Xóa chat</button>
         </div>
       </header>
+
+      <div class="status-drawer" id="statusDrawer" hidden>
+        <div class="drawer-item"><strong id="drawerServer">Server</strong><span>Đang kiểm tra</span></div>
+        <div class="drawer-item"><strong id="drawerModel">Model</strong><span>minion</span></div>
+        <div class="drawer-item"><strong id="drawerWindow">Cửa sổ</strong><span>-</span></div>
+        <div class="drawer-item"><strong id="drawerAgent">Agent</strong><span>Chưa chạy</span></div>
+      </div>
 
       <div id="chat">
         <div class="welcome" id="welcome">
@@ -453,6 +500,7 @@
       <footer>
         <div class="inputbar">
           <textarea id="input" rows="1" placeholder="Nhập tin nhắn... Enter để gửi, Shift+Enter để xuống dòng"></textarea>
+          <button id="stopChat" type="button" aria-label="Ngưng chat" disabled>■</button>
           <button id="send" type="button" aria-label="Gửi">➤</button>
         </div>
         <div class="hint">Logo là mascot gốc màu vàng đeo kính, không sao chép nhân vật/logo Minions có bản quyền.</div>
@@ -480,18 +528,32 @@
 const chat = document.getElementById('chat');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
+const stopChatBtn = document.getElementById('stopChat');
 const modelSel = document.getElementById('model');
 const welcome = document.getElementById('welcome');
 const computerUseToggle = document.getElementById('computerUseToggle');
 const computerUseEnabled = document.getElementById('computerUseEnabled');
+const statusBtn = document.getElementById('statusBtn');
+const stopAgentBtn = document.getElementById('stopAgent');
+const statusDrawer = document.getElementById('statusDrawer');
+const sideActiveWindow = document.getElementById('sideActiveWindow');
+const sideCursor = document.getElementById('sideCursor');
+const drawerServer = document.getElementById('drawerServer');
+const drawerModel = document.getElementById('drawerModel');
+const drawerWindow = document.getElementById('drawerWindow');
+const drawerAgent = document.getElementById('drawerAgent');
 let history = [];
 let busy = false;
+let currentAgentRunId = null;
+let currentChatController = null;
+let stopRequested = false;
+let lastError = '';
 
 const MINION_SYSTEM_PROMPT = [
   "Bạn là Minion, trợ lý AI local do Duy phát triển.",
   "Luôn nhận mình tên là Minion. Khi được hỏi ai tạo ra hoặc phát triển bạn, trả lời là Duy.",
   "Bạn hỗ trợ công việc nhà phố TP.HCM: tìm căn, lọc dữ liệu, tóm tắt thông tin để gọi khách.",
-  "Trả lời tiếng Việt ngắn gọn, thực dụng, không bịa thông tin."
+  "Trả lời tiếng Việt có dấu đầy đủ, ngắn gọn, thực dụng, không bịa thông tin."
 ].join(" ");
 
 const samples = [
@@ -502,11 +564,16 @@ const samples = [
   "Tóm tắt căn phù hợp để gọi khách"
 ];
 
-const agentSamples = [
-  "🔍 Tìm kiếm web: Python asyncio là gì?",
-  "📁 Liệt kê các file Python trong dự án",
-  "📖 Đọc file README.md và tóm tắt",
-  "🌐 Lấy nội dung https://python.org",
+const toolCommands = [
+  { label: 'Màn hình', command: 'xem màn hình' },
+  { label: 'UI tree', command: 'xem UI' },
+  { label: 'Cửa sổ', command: 'danh sách cửa sổ' },
+  { label: 'Workspace', command: 'workspace status' },
+  { label: 'Kiểm tra', command: 'kiểm tra dự án' },
+  { label: 'Review', command: 'review dự án' },
+  { label: 'Diff', command: 'xem diff' },
+  { label: 'Tìm code', command: 'tìm code "TODO"' },
+  { label: 'Agent mẫu', command: 'agent: xem màn hình rồi danh sách cửa sổ' }
 ];
 
 const chips = document.getElementById('chips');
@@ -520,6 +587,21 @@ samples.forEach((sample) => {
     send();
   };
   chips.appendChild(chip);
+});
+
+const toolButtons = document.getElementById('toolButtons');
+toolCommands.forEach((item) => {
+  const btn = document.createElement('button');
+  btn.className = 'tool-btn';
+  btn.type = 'button';
+  btn.textContent = item.label;
+  btn.onclick = () => {
+    computerUseEnabled.checked = true;
+    computerUseToggle.classList.add('active');
+    input.value = item.command;
+    sendComputerCommand(item.command);
+  };
+  toolButtons.appendChild(btn);
 });
 
 // Nạp danh sách model từ server local và ưu tiên alias Minion.
@@ -545,6 +627,8 @@ fetch('/api/tags').then(r => r.json()).then((data) => {
   modelSel.appendChild(option);
 });
 
+modelSel.addEventListener('change', () => updateStatus());
+
 input.addEventListener('input', () => {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 150) + 'px';
@@ -558,54 +642,42 @@ input.addEventListener('keydown', (event) => {
 });
 
 sendBtn.onclick = () => send();
-
-const agentToggle = document.getElementById('agentToggle');
-const agentEnabled = document.getElementById('agentEnabled');
-const planToggle = document.getElementById('planToggle');
-const planEnabled = document.getElementById('planEnabled');
-agentEnabled.checked = false;
-agentToggle.classList.toggle('active', agentEnabled.checked);
-agentEnabled.addEventListener('change', () => {
-  agentToggle.classList.toggle('active', agentEnabled.checked);
-  if (agentEnabled.checked) {
-    computerUseEnabled.checked = false;
-    computerUseToggle.classList.remove('active');
+stopChatBtn.onclick = async () => {
+  stopRequested = true;
+  stopChatBtn.disabled = true;
+  if (currentChatController) currentChatController.abort();
+  if (currentAgentRunId) {
+    try {
+      await fetch(`/api/agent/runs/${currentAgentRunId}/stop`, { method: 'POST' });
+    } catch {
+      // Stop UI vẫn phải phản hồi ngay cả khi agent endpoint lỗi.
+    }
   }
-});
-
-// Cập nhật danh sách câu hỏi nhanh theo chế độ Agent (đặt sau khi đã khai báo agentEnabled & chips)
-agentEnabled.addEventListener('change', () => {
-  chips.innerHTML = '';
-  const list = agentEnabled.checked ? agentSamples : samples;
-  list.forEach((sample) => {
-    const chip = document.createElement('button');
-    chip.className = 'chip';
-    chip.type = 'button';
-    chip.textContent = sample;
-    chip.onclick = () => {
-      input.value = agentEnabled.checked
-        ? sample.replace(/^[^\s]+\s/, '')  // bỏ emoji prefix
-        : sample;
-      send();
-    };
-    chips.appendChild(chip);
-  });
-});
-
-planEnabled.checked = false;
-planEnabled.addEventListener('change', () => {
-  planToggle.classList.toggle('active', planEnabled.checked);
-});
+};
 
 computerUseEnabled.checked = false;
 computerUseToggle.classList.toggle('active', computerUseEnabled.checked);
 computerUseEnabled.addEventListener('change', () => {
   computerUseToggle.classList.toggle('active', computerUseEnabled.checked);
-  if (computerUseEnabled.checked) {
-    agentEnabled.checked = false;
-    agentToggle.classList.remove('active');
-  }
+  updateStatus();
 });
+
+statusBtn.onclick = () => {
+  statusDrawer.hidden = !statusDrawer.hidden;
+  updateStatus();
+};
+
+stopAgentBtn.onclick = async () => {
+  if (!currentAgentRunId) return;
+  try {
+    await fetch(`/api/agent/runs/${currentAgentRunId}/stop`, { method: 'POST' });
+    stopAgentBtn.disabled = true;
+    updateStatus('Đang dừng');
+  } catch (error) {
+    lastError = String(error);
+    updateStatus();
+  }
+};
 
 document.getElementById('clear').onclick = () => {
   history = [];
@@ -613,6 +685,32 @@ document.getElementById('clear').onclick = () => {
   welcome.style.display = '';
   input.focus();
 };
+
+async function updateStatus(agentLabel = null) {
+  drawerModel.nextElementSibling.textContent = modelSel.value || 'minion';
+  drawerAgent.nextElementSibling.textContent = agentLabel || (currentAgentRunId ? currentAgentRunId.slice(0, 8) : 'Chưa chạy');
+  try {
+    const [healthResp, stateResp] = await Promise.all([
+      fetch('/api/health'),
+      fetch('/api/computer-use/state')
+    ]);
+    const health = await healthResp.json();
+    const state = await stateResp.json();
+    drawerServer.nextElementSibling.textContent = health.status === 'ok' ? 'OK' : 'Không rõ';
+    const active = state.active_window || '-';
+    const cursor = state.cursor ? `${state.cursor.x}, ${state.cursor.y}` : '-';
+    sideActiveWindow.textContent = active;
+    sideCursor.textContent = cursor;
+    drawerWindow.nextElementSibling.textContent = active;
+  } catch (error) {
+    lastError = String(error);
+    drawerServer.nextElementSibling.textContent = 'Lỗi kết nối';
+    drawerWindow.nextElementSibling.textContent = lastError;
+  }
+}
+
+setInterval(updateStatus, 8000);
+updateStatus();
 
 function addBubble(role, text) {
   if (welcome) welcome.style.display = 'none';
@@ -701,6 +799,160 @@ function renderComputerPayload(bubble, payload, stickToBottom = isChatNearBottom
   const panel = document.createElement('div');
   panel.className = 'computer-panel';
 
+  if (payload.type === 'approval_request') {
+    const card = document.createElement('div');
+    card.className = 'approval-card';
+    const reason = document.createElement('div');
+    reason.textContent = `Cần xác nhận: ${payload.reason || payload.action || 'thao tác rủi ro'}`;
+    const risk = document.createElement('div');
+    risk.textContent = `Mức quyền: ${payload.risk_level || 'needs_approval'}`;
+    const approve = document.createElement('button');
+    approve.type = 'button';
+    approve.textContent = 'Cho phép một lần';
+    approve.onclick = async () => {
+      approve.disabled = true;
+      await runApprovedCommand(payload.command, payload.approval_id);
+    };
+    card.appendChild(reason);
+    card.appendChild(risk);
+    card.appendChild(approve);
+    panel.appendChild(card);
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
+  if (payload.type === 'workspace_diff') {
+    const meta = document.createElement('div');
+    meta.className = 'computer-meta';
+    meta.textContent = `${payload.path || 'file'} - ${payload.count || 0} chỗ thay đổi`;
+    const block = document.createElement('pre');
+    block.className = 'computer-result-block';
+    block.textContent = payload.diff || '(không có diff)';
+    panel.appendChild(meta);
+    panel.appendChild(block);
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
+  if (payload.type === 'workspace_diagnostics' && Array.isArray(payload.checks)) {
+    const summary = document.createElement('div');
+    summary.className = 'computer-meta';
+    const counts = payload.summary || {};
+    summary.textContent = `Diagnostics: ${counts.passed || 0}/${counts.total || payload.checks.length} OK - ${payload.root || ''}`;
+    panel.appendChild(summary);
+
+    payload.checks.forEach((check) => {
+      const item = document.createElement('div');
+      item.className = 'computer-step';
+      const status = check.ok ? 'OK' : 'Lỗi';
+      const title = document.createElement('strong');
+      title.textContent = `${status}: ${check.name || 'check'}`;
+      const command = document.createElement('div');
+      command.className = 'computer-meta';
+      command.textContent = check.command || '';
+      const block = document.createElement('pre');
+      block.className = 'computer-result-block';
+      block.textContent = check.output || '(không có output)';
+      item.appendChild(title);
+      item.appendChild(command);
+      item.appendChild(block);
+      panel.appendChild(item);
+    });
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
+  if (payload.type === 'workspace_review' && Array.isArray(payload.findings)) {
+    const summary = document.createElement('div');
+    summary.className = 'computer-meta';
+    const counts = payload.summary || {};
+    summary.textContent = `Review: ${counts.findings || 0} finding, ${counts.blockers || 0} cần xử lý sớm - ${payload.root || ''}`;
+    panel.appendChild(summary);
+
+    if (!payload.findings.length) {
+      const empty = document.createElement('div');
+      empty.className = 'computer-step';
+      empty.textContent = 'Không thấy lỗi blocker trong các check hiện tại.';
+      panel.appendChild(empty);
+    }
+
+    payload.findings.forEach((finding) => {
+      const item = document.createElement('div');
+      item.className = 'computer-step';
+      const title = document.createElement('strong');
+      title.textContent = `${finding.severity || 'P?'}: ${finding.title || 'Finding'}`;
+      const detail = document.createElement('div');
+      detail.textContent = finding.detail || '';
+      const command = document.createElement('div');
+      command.className = 'computer-meta';
+      command.textContent = finding.command || '';
+      item.appendChild(title);
+      item.appendChild(detail);
+      if (finding.command) item.appendChild(command);
+      if (finding.evidence) {
+        const block = document.createElement('pre');
+        block.className = 'computer-result-block';
+        block.textContent = finding.evidence;
+        item.appendChild(block);
+      }
+      panel.appendChild(item);
+    });
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
+  if (payload.type === 'workspace_current_diff') {
+    const summary = document.createElement('div');
+    summary.className = 'computer-meta';
+    const counts = payload.summary || {};
+    summary.textContent = `Diff: ${counts.changed || 0} thay đổi, ${counts.files || 0} file - ${payload.root || ''}`;
+    panel.appendChild(summary);
+
+    if (Array.isArray(payload.files) && payload.files.length) {
+      const files = document.createElement('pre');
+      files.className = 'computer-result-block';
+      files.textContent = payload.files.join('\n');
+      panel.appendChild(files);
+    }
+
+    const stat = document.createElement('pre');
+    stat.className = 'computer-result-block';
+    stat.textContent = payload.stat || '(không có diff stat)';
+    panel.appendChild(stat);
+
+    if (payload.diff) {
+      const block = document.createElement('pre');
+      block.className = 'computer-result-block';
+      block.textContent = payload.diff;
+      panel.appendChild(block);
+    }
+
+    if (payload.truncated) {
+      const note = document.createElement('div');
+      note.className = 'computer-meta';
+      note.textContent = 'Diff dài nên Minion đã cắt bớt phần cuối.';
+      panel.appendChild(note);
+    }
+
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
+  if (payload.type === 'workspace_run' || payload.type === 'workspace') {
+    const block = document.createElement('pre');
+    block.className = 'computer-result-block';
+    block.textContent = payload.output || payload.diff || JSON.stringify(payload, null, 2);
+    panel.appendChild(block);
+    bubble.appendChild(panel);
+    if (stickToBottom) scrollChatToBottom();
+    return;
+  }
+
   if (payload.type === 'agent_run' && Array.isArray(payload.steps)) {
     const steps = document.createElement('div');
     steps.className = 'computer-steps';
@@ -709,6 +961,18 @@ function renderComputerPayload(bubble, payload, stickToBottom = isChatNearBottom
       item.className = 'computer-step';
       const status = step.ok ? 'OK' : 'Lỗi';
       item.innerHTML = `<strong>Bước ${step.index} - ${status}:</strong> ${escapeHtml(step.instruction || '')}<br>${escapeHtml(step.message || '')}`;
+      if (step.needs_approval && step.data?.type === 'approval_request') {
+        const approve = document.createElement('button');
+        approve.className = 'action-btn';
+        approve.type = 'button';
+        approve.textContent = 'Cho phép bước này';
+        approve.onclick = async () => {
+          approve.disabled = true;
+          await runApprovedCommand(step.data.command, step.data.approval_id);
+        };
+        item.appendChild(document.createElement('br'));
+        item.appendChild(approve);
+      }
       steps.appendChild(item);
     });
     panel.appendChild(steps);
@@ -815,89 +1079,118 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-function renderAgentResult(bubble, result) {
-  bubble.textContent = '';
+function appendComputerResult(result) {
+  const text = result?.message || 'Không có phản hồi từ Minion.';
+  const bubble = addBubble('bot', text);
+  if (result?.data) renderComputerPayload(bubble, result.data);
+  return bubble;
+}
 
-  const steps = result.steps || [];
-  if (steps.length > 0) {
-    const stepsEl = document.createElement('div');
-    stepsEl.className = 'agent-steps';
+async function sendComputerCommand(command) {
+  const text = (command || '').trim();
+  if (!text || busy) return;
 
-    steps.forEach((step) => {
-      const stepEl = document.createElement('div');
-      stepEl.className = 'agent-step';
+  busy = true;
+  stopRequested = false;
+  currentChatController = new AbortController();
+  sendBtn.disabled = true;
+  stopChatBtn.disabled = false;
+  addBubble('user', text);
+  history.push({ role: 'user', content: text });
 
-      const header = document.createElement('div');
-      header.className = 'agent-step-header';
-      const icon = step.is_final ? '✅' : (step.tool_calls?.length ? '🔧' : '💭');
-      header.innerHTML = `
-        <span class="agent-step-icon">${icon}</span>
-        <span class="agent-step-title">Bước ${step.step}${step.is_final ? ' — Hoàn thành' : ''}</span>
-        <span class="agent-step-toggle">▼</span>
-      `;
-
-      const body = document.createElement('div');
-      body.className = 'agent-step-body';
-
-      if (step.thought) {
-        const t = document.createElement('div');
-        t.className = 'agent-thought';
-        t.textContent = step.thought;
-        body.appendChild(t);
-      }
-
-      (step.tool_calls || []).forEach((tc) => {
-        const callEl = document.createElement('div');
-        callEl.className = 'agent-tool-call';
-        const argsStr = JSON.stringify(tc.arguments || {}, null, 2);
-        callEl.innerHTML = `
-          <div><span class="agent-tool-name">${escapeHtml(tc.name)}</span>
-          <span class="agent-tool-args">(${escapeHtml(argsStr)})</span></div>
-          <div class="agent-tool-result">${escapeHtml((tc.result || '').slice(0, 600))}</div>
-        `;
-        body.appendChild(callEl);
-      });
-
-      header.onclick = () => body.classList.toggle('open');
-      stepEl.appendChild(header);
-      stepEl.appendChild(body);
-      stepsEl.appendChild(stepEl);
+  try {
+    const resp = await fetch('/api/computer-use/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: text, enabled: true }),
+      signal: currentChatController.signal
     });
-
-    // Khi đang stream: tự mở bước mới nhất để thấy agent đang làm gì
-    if (result.streaming) {
-      const lastBody = stepsEl.lastChild && stepsEl.lastChild.querySelector('.agent-step-body');
-      if (lastBody) lastBody.classList.add('open');
-    }
-
-    bubble.appendChild(stepsEl);
+    if (!resp.ok) throw new Error('Computer-use API trả lỗi ' + resp.status);
+    const result = await resp.json();
+    appendComputerResult(result);
+    if (result?.message) history.push({ role: 'assistant', content: result.message });
+  } catch (error) {
+    const message = (error.name === 'AbortError' || stopRequested)
+      ? 'Đã ngưng chat.'
+      : `Không chạy được lệnh công cụ: ${error}`;
+    appendComputerResult({ ok: false, message });
   }
 
-  // Đang stream và chưa có câu trả lời → hiện chỉ báo đang chạy
-  if (result.streaming && !result.answer) {
-    const running = document.createElement('div');
-    running.className = 'agent-meta';
-    running.textContent = `⏳ Đang làm... (${steps.length} bước)`;
-    bubble.appendChild(running);
+  busy = false;
+  sendBtn.disabled = false;
+  stopChatBtn.disabled = true;
+  currentChatController = null;
+  stopRequested = false;
+  input.focus();
+}
+
+async function runApprovedCommand(command, approvalId) {
+  try {
+    const resp = await fetch('/api/computer-use/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        command,
+        enabled: true,
+        approval_token: approvalId
+      })
+    });
+    const result = await resp.json();
+    appendComputerResult(result);
+  } catch (error) {
+    appendComputerResult({ ok: false, message: `Không chạy được lệnh đã duyệt: ${error}` });
+  }
+}
+
+function looksLikeAgentTask(text) {
+  const plain = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replaceAll('đ', 'd');
+  return /^(minion\s+)?(tu\s+lam|auto\s+lam|agent|cowork)\b/.test(plain);
+}
+
+async function sendAgentTask(text, bot) {
+  currentAgentRunId = null;
+  stopAgentBtn.disabled = false;
+  updateStatus('Đang chạy');
+  const startResp = await fetch('/api/agent/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      task: text,
+      enabled: computerUseEnabled.checked,
+      max_steps: 8
+    }),
+    signal: currentChatController?.signal
+  });
+  if (!startResp.ok) throw new Error('Agent API trả lỗi ' + startResp.status);
+  let run = await startResp.json();
+  currentAgentRunId = run.id;
+  bot.textContent = `Agent run ${run.id.slice(0, 8)} đang chạy...`;
+
+  while (['queued', 'running', 'paused'].includes(run.status)) {
+    if (stopRequested) break;
+    await new Promise(resolve => setTimeout(resolve, 700));
+    const pollResp = await fetch(`/api/agent/runs/${run.id}`, { signal: currentChatController?.signal });
+    run = await pollResp.json();
+    const lines = [
+      `Agent run ${run.id.slice(0, 8)}: ${run.status}`,
+      ...(run.steps || []).map(step => `${step.index}. ${step.instruction} -> ${step.message}`)
+    ];
+    bot.textContent = lines.join('\n');
     scrollChatToBottom();
-    return;
   }
 
-  const answerLabel = document.createElement('div');
-  answerLabel.className = 'agent-answer-label';
-  answerLabel.textContent = '💬 Câu trả lời';
-  bubble.appendChild(answerLabel);
-
-  const answerEl = document.createElement('div');
-  answerEl.textContent = result.answer || '(không có câu trả lời)';
-  bubble.appendChild(answerEl);
-
-  const meta = document.createElement('div');
-  meta.className = 'agent-meta';
-  meta.textContent = `Model: ${result.model} · ${steps.length} bước · ${(result.elapsed || 0).toFixed(1)}s`;
-  bubble.appendChild(meta);
-
-  scrollChatToBottom();
+  stopAgentBtn.disabled = true;
+  currentAgentRunId = null;
+  updateStatus(run.status);
+  bot.textContent = run.message || `Agent run ${run.status}`;
+  renderComputerPayload(bot, {
+    type: 'agent_run',
+    status: run.status,
+    ok: run.ok,
+    steps: run.steps || [],
+    screenshot: run.screenshot
+  });
+  return run;
 }
 
 async function send(overrideText = null) {
@@ -905,7 +1198,10 @@ async function send(overrideText = null) {
   if (!text || busy) return;
 
   busy = true;
+  stopRequested = false;
+  currentChatController = new AbortController();
   sendBtn.disabled = true;
+  stopChatBtn.disabled = false;
   addBubble('user', text);
   if (overrideText === null) {
     input.value = '';
@@ -917,70 +1213,21 @@ async function send(overrideText = null) {
   bot.classList.add('typing');
   let answer = '';
 
-  // ── Agent mode (streaming) ───────────────────────────────────────────────────
-  if (agentEnabled.checked) {
-    bot.textContent = '🤖 Agent đang chạy...';
-    const liveSteps = [];
-    try {
-      const resp = await fetch('/v1/agent/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          task: text,
-          model: modelSel.value || '',
-          max_steps: 8,
-          temperature: 0.2,
-          max_tokens: 512,
-          mode: 'auto',
-          permission_mode: planEnabled.checked ? 'plan' : 'auto',
-        })
-      });
-      if (!resp.ok || !resp.body) throw new Error('Server trả lỗi ' + resp.status);
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let done = false;
-      bot.classList.remove('typing');
-
-      while (!done) {
-        const { done: rdone, value } = await reader.read();
-        if (rdone) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
-          const payload = trimmed.slice(5).trim();
-          if (payload === '[DONE]') { done = true; break; }
-          let ev;
-          try { ev = JSON.parse(payload); } catch { continue; }
-
-          if (ev.type === 'step') {
-            liveSteps.push(ev.step);
-            renderAgentResult(bot, { steps: liveSteps, answer: '', model: modelSel.value, elapsed: 0, streaming: true });
-          } else if (ev.type === 'done') {
-            renderAgentResult(bot, ev);
-            answer = ev.answer || '';
-          } else if (ev.type === 'error') {
-            bot.textContent = '❌ Lỗi agent: ' + (ev.error || '');
-          }
-        }
-      }
-    } catch (error) {
-      bot.classList.remove('typing');
-      bot.textContent = 'Lỗi agent: ' + error.message;
-    }
-    if (answer.trim()) history.push({ role: 'assistant', content: answer });
-    busy = false;
-    sendBtn.disabled = false;
-    input.focus();
-    return;
-  }
-
-  // ── Chat mode (streaming) ────────────────────────────────────────────────────
   try {
+    if (computerUseEnabled.checked && looksLikeAgentTask(text)) {
+      bot.classList.remove('typing');
+      const run = await sendAgentTask(text, bot);
+      answer = run.message || `Agent run ${run.status}`;
+      if (answer.trim()) history.push({ role: 'assistant', content: answer });
+      busy = false;
+      sendBtn.disabled = false;
+      stopChatBtn.disabled = true;
+      currentChatController = null;
+      stopRequested = false;
+      input.focus();
+      return;
+    }
+
     const isSmallVi = modelSel.value === 'chat_vi';
     const resp = await fetch('/api/chat', {
       method: 'POST',
@@ -998,7 +1245,8 @@ async function send(overrideText = null) {
               num_predict: 300,
               computer_use_enabled: computerUseEnabled.checked
             }
-      })
+      }),
+      signal: currentChatController.signal
     });
 
     if (!resp.ok || !resp.body) throw new Error('Server trả lỗi ' + resp.status);
@@ -1029,7 +1277,11 @@ async function send(overrideText = null) {
       }
     }
   } catch (error) {
-    answer = 'Lỗi kết nối tới server local. Anh chạy file start_minion_chat.bat hoặc lệnh `python server.py --port 11435` rồi mở lại giao diện.';
+    if (error.name === 'AbortError' || stopRequested) {
+      answer = (answer.trim() ? answer + '\n\n' : '') + 'Đã ngưng chat.';
+    } else {
+      answer = 'Lỗi kết nối tới server local. Anh chạy file start_minion_chat.bat hoặc lệnh `python server.py --port 11435` rồi mở lại giao diện.';
+    }
     bot.textContent = answer;
   }
 
@@ -1050,6 +1302,9 @@ async function send(overrideText = null) {
   if (answer.trim()) history.push({ role: 'assistant', content: answer });
   busy = false;
   sendBtn.disabled = false;
+  stopChatBtn.disabled = true;
+  currentChatController = null;
+  stopRequested = false;
   input.focus();
 }
 </script>
