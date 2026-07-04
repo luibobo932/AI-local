@@ -231,14 +231,19 @@ async def handle(question: str, fetch_context, path: Path = CUSTOMERS_PATH) -> s
         context = await fetch_context(f"{query} lấy 1 căn")
         if not context or context.startswith("Dữ liệu nhà Supabase") or "chưa" in context[:60].lower():
             return f"Không tìm thấy căn khớp \"{query}\" để soạn tin. Thử ghi rõ số nhà/đường/quận hơn."
-        # lấy block căn đầu tiên (tới dòng trống đôi hoặc hết)
-        first_block = context.strip().split("\n\n")[0]
-        # bỏ dòng tiêu đề tổng nếu có (vd "Tìm thấy X căn ...")
-        block_lines = [ln for ln in first_block.splitlines() if ln.strip()]
-        while block_lines and not re.match(r"^\s*(?:\d+\.|-)\s*", block_lines[0]):
-            block_lines.pop(0)
-        if not block_lines:
+        # tìm căn ĐẦU TIÊN trong toàn bộ kết quả: dòng bắt đầu bằng "1." / "2." ...
+        lines = context.strip().splitlines()
+        start = next(
+            (i for i, ln in enumerate(lines) if re.match(r"^\s*\d+\.\s", ln)),
+            None,
+        )
+        if start is None:
             return f"Không tách được thông tin căn từ kết quả cho \"{query}\"."
-        return render_call_script("\n".join(block_lines))
+        block = [lines[start]]
+        for ln in lines[start + 1:]:
+            if not ln.strip() or re.match(r"^\s*\d+\.\s", ln):
+                break
+            block.append(ln)
+        return render_call_script("\n".join(block))
 
     return None
