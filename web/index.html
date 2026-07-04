@@ -509,24 +509,6 @@ const agentSamples = [
   "🌐 Lấy nội dung https://python.org",
 ];
 
-agentEnabled.addEventListener('change', () => {
-  chips.innerHTML = '';
-  const list = agentEnabled.checked ? agentSamples : samples;
-  list.forEach((sample) => {
-    const chip = document.createElement('button');
-    chip.className = 'chip';
-    chip.type = 'button';
-    chip.textContent = sample;
-    chip.onclick = () => {
-      input.value = agentEnabled.checked
-        ? sample.replace(/^[^\s]+\s/, '')  // bỏ emoji prefix
-        : sample;
-      send();
-    };
-    chips.appendChild(chip);
-  });
-});
-
 const chips = document.getElementById('chips');
 samples.forEach((sample) => {
   const chip = document.createElement('button');
@@ -589,6 +571,25 @@ agentEnabled.addEventListener('change', () => {
     computerUseEnabled.checked = false;
     computerUseToggle.classList.remove('active');
   }
+});
+
+// Cập nhật danh sách câu hỏi nhanh theo chế độ Agent (đặt sau khi đã khai báo agentEnabled & chips)
+agentEnabled.addEventListener('change', () => {
+  chips.innerHTML = '';
+  const list = agentEnabled.checked ? agentSamples : samples;
+  list.forEach((sample) => {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.type = 'button';
+    chip.textContent = sample;
+    chip.onclick = () => {
+      input.value = agentEnabled.checked
+        ? sample.replace(/^[^\s]+\s/, '')  // bỏ emoji prefix
+        : sample;
+      send();
+    };
+    chips.appendChild(chip);
+  });
 });
 
 planEnabled.checked = false;
