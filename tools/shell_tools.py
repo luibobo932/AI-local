@@ -32,8 +32,12 @@ def run_command(command: str, cwd: str = None, timeout: int = 30) -> str:
             return f"[BLOCKED] Lệnh '{blocked}' bị chặn vì lý do an toàn."
 
     cwd = cwd or os.getcwd()
+    note = ""
     if not os.path.isdir(cwd):
-        return f"[ERROR] Thư mục không tồn tại: {cwd}"
+        # Model local hay bịa placeholder (vd /path/to/project) → tự về thư mục
+        # hiện tại kèm ghi chú, đỡ phí một bước agent chỉ để sửa cwd.
+        note = f"[Lưu ý] cwd '{cwd}' không tồn tại — đã chạy trong '{os.getcwd()}' thay thế.\n"
+        cwd = os.getcwd()
 
     try:
         result = subprocess.run(
@@ -46,6 +50,8 @@ def run_command(command: str, cwd: str = None, timeout: int = 30) -> str:
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
         out_parts = []
+        if note:
+            out_parts.append(note.rstrip())
         if result.stdout:
             out_parts.append(result.stdout.rstrip())
         if result.stderr:

@@ -18,6 +18,7 @@ Sử dụng:
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -78,6 +79,8 @@ class AgentConfig:
     timeout: float = 60.0
     on_step: Optional[object] = None  # callback(AgentStep) gọi sau mỗi bước (cho streaming)
     policy: Optional[object] = None   # PermissionPolicy kiểm soát quyền tool
+    auto_verify: bool = True          # tự compile .py sau khi sửa + ép kiểm chứng trước khi kết thúc
+    context_budget_chars: int = 24000  # ngưỡng nén ngữ cảnh (~6-8k token)
 
 
 # ─── Kết quả ──────────────────────────────────────────────────────────────────
@@ -202,6 +205,126 @@ def _emit(cfg: AgentConfig, step: "AgentStep"):
             pass
 
 
+# ─── Bộ não: auto-verify, nén ngữ cảnh, gợi ý kế hoạch ───────────────────────
+
+_EDIT_TOOLS = {"write_file", "edit_file", "multi_edit", "apply_patch"}
+
+
+def _auto_verify_note(tool_name: str, args: dict) -> str:
+    """Sau khi sửa file .py: compile ngay để bắt lỗi cú pháp, đính kèm vào kết quả tool."""
+    if tool_name not in _EDIT_TOOLS:
+        return ""
+    path = str(args.get("path", ""))
+    if not path.endswith(".py") or not os.path.exists(path):
+        return ""
+    import py_compile
+    try:
+        py_compile.compile(path, doraise=True)
+        return f"\n[Auto-check] ✅ Cú pháp Python OK: {path}"
+    except py_compile.PyCompileError as e:
+        return f"\n[Auto-check] ❌ LỖI CÚ PHÁP trong {path}:\n{e}\nHãy sửa ngay lỗi này trước khi làm bước khác."
+    except Exception:
+        return ""
+
+
+def _msg_size(m: dict) -> int:
+    size = len(str(m.get("content") or ""))
+    for tc in m.get("tool_calls") or []:
+        try:
+            size += len(json.dumps(tc))
+        except Exception:
+            size += 200
+    return size
+
+
+def _total_size(messages: list[dict]) -> int:
+    return sum(_msg_size(m) for m in messages)
+
+
+def _split_groups(messages: list[dict]) -> list[list[dict]]:
+    """Gom message thành nhóm không thể tách rời: assistant(tool_calls) + các tool kết quả của nó."""
+    groups: list[list[dict]] = []
+    for m in messages:
+        if m.get("role") == "tool" and groups and groups[-1][0].get("tool_calls"):
+            groups[-1].append(m)
+        else:
+            groups.append([m])
+    return groups
+
+
+def _compact_messages(messages: list[dict], budget_chars: int) -> list[dict]:
+    """Nén hội thoại khi vượt ngân sách ngữ cảnh.
+
+    Tầng 1: cắt ngắn output tool cũ (giữ nguyên các message gần cuối).
+    Tầng 2: bỏ hẳn các nhóm bước cũ nhất, thay bằng một ghi chú tóm tắt —
+            luôn giữ system + task gốc + 2 nhóm cuối, và không bao giờ
+            tách cặp assistant(tool_calls)/tool để không phạm giao thức.
+    """
+    if _total_size(messages) <= budget_chars or len(messages) <= 4:
+        return messages
+
+    head = messages[:2]  # system + task gốc: không bao giờ đụng tới
+    groups = _split_groups(messages[2:])
+
+    # Tầng 1: rút gọn tool output ở các nhóm cũ (chừa 2 nhóm cuối)
+    out_groups = [[dict(m) for m in g] for g in groups]
+    for g in out_groups[:-2]:
+        for m in g:
+            content = m.get("content")
+            if m.get("role") == "tool" and isinstance(content, str) and len(content) > 500:
+                m["content"] = content[:500] + "\n...[output cũ đã được nén bớt]"
+    if _total_size(head + [m for g in out_groups for m in g]) <= budget_chars:
+        return head + [m for g in out_groups for m in g]
+
+    # Tầng 2: bỏ dần nhóm cũ nhất, thay bằng ghi chú
+    dropped_tools: list[str] = []
+    dropped = 0
+    while len(out_groups) > 2:
+        candidate = out_groups[0]
+        for m in candidate:
+            for tc in m.get("tool_calls") or []:
+                name = (tc.get("function") or {}).get("name", "")
+                if name:
+                    dropped_tools.append(name)
+        out_groups.pop(0)
+        dropped += 1
+        note = {
+            "role": "user",
+            "content": (
+                f"[Ngữ cảnh đã nén] {dropped} bước cũ đã được lược bỏ để tiết kiệm bộ nhớ. "
+                f"Các tool đã chạy trong phần bị lược: {', '.join(dropped_tools[-12:]) or '(không có)'}. "
+                "Kết quả quan trọng đã phản ánh ở các bước sau."
+            ),
+        }
+        flat = head + [note] + [m for g in out_groups for m in g]
+        if _total_size(flat) <= budget_chars:
+            return flat
+
+    note = {
+        "role": "user",
+        "content": (
+            f"[Ngữ cảnh đã nén] {dropped} bước cũ đã được lược bỏ. "
+            f"Tool đã chạy: {', '.join(dropped_tools[-12:]) or '(không có)'}."
+        ),
+    }
+    return head + ([note] if dropped else []) + [m for g in out_groups for m in g]
+
+
+def _planning_hint(task: str, max_steps: int) -> str:
+    """Nếu task trông nhiều bước → nhắc agent lập kế hoạch todo trước khi làm."""
+    if max_steps < 4:
+        return ""
+    plain = task.lower()
+    connectors = sum(plain.count(k) for k in (" và ", " rồi ", " sau đó ", ", sau do ", " roi "))
+    numbered = bool(len([1 for tok in ("1.", "2.", "- ") if tok in task]) >= 2)
+    if len(task) > 140 or connectors >= 2 or numbered:
+        return (
+            "\n\n(Nhiệm vụ này gồm nhiều bước — hãy gọi `todo_write` ĐẦU TIÊN để lập kế hoạch, "
+            "và cập nhật trạng thái todo sau mỗi bước hoàn thành.)"
+        )
+    return ""
+
+
 # ─── Function Calling mode ────────────────────────────────────────────────────
 
 def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
@@ -218,8 +341,17 @@ def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
     steps = []
     t0 = time.time()
 
-    for step_num in range(1, cfg.max_steps + 1):
+    edited_unverified: set[str] = set()  # file .py đã sửa nhưng chưa chạy lệnh kiểm chứng
+    verify_nudged = False                # chỉ nhắc kiểm chứng 1 lần để tránh lặp vô hạn
+    step_budget = cfg.max_steps
+    step_num = 0
+
+    while step_num < step_budget:
+        step_num += 1
         step = AgentStep(step=step_num)
+
+        # Nén ngữ cảnh khi hội thoại dài (giữ system + task + các bước gần nhất)
+        messages = _compact_messages(messages, cfg.context_budget_chars)
 
         try:
             data = _chat_request(
@@ -237,6 +369,22 @@ def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
 
         # Model đã có câu trả lời cuối
         if choice.get("finish_reason") == "stop" or not msg.get("tool_calls"):
+            # Verify gate: sửa code xong mà chưa chạy kiểm chứng thì chưa cho kết thúc
+            if cfg.auto_verify and edited_unverified and not verify_nudged:
+                verify_nudged = True
+                step_budget = min(step_budget + 2, cfg.max_steps + 2)
+                messages.append({"role": "assistant", "content": msg.get("content", "")})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "[Kiểm chứng bắt buộc] Bạn đã sửa các file sau nhưng CHƯA chạy lệnh nào để "
+                        f"kiểm tra: {', '.join(sorted(edited_unverified))}. "
+                        "Hãy dùng `run_command` chạy test/compile/thử code trước, rồi mới kết luận. "
+                        "Nếu lỗi thì sửa tiếp đến khi chạy đúng."
+                    ),
+                })
+                continue
+
             step.thought = msg.get("content", "")
             step.is_final = True
             steps.append(step)
@@ -263,6 +411,18 @@ def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
                 args = {}
 
             result = call_tool(name, args, policy=cfg.policy)
+
+            # Auto-check: sửa .py xong thì compile ngay, lỗi cú pháp hiện thẳng trong kết quả
+            if cfg.auto_verify:
+                note = _auto_verify_note(name, args)
+                if note:
+                    result += note
+                path = str(args.get("path", ""))
+                if name in _EDIT_TOOLS and path.endswith(".py") and not result.startswith(("Lỗi", "❌")):
+                    edited_unverified.add(path)
+                elif name == "run_command":
+                    edited_unverified.clear()  # đã chạy kiểm chứng
+
             tool_call = ToolCall(id=tc_id, name=name, arguments=args, result=result)
             step.tool_calls.append(tool_call)
 
@@ -278,14 +438,24 @@ def _run_function_calling(task: str, cfg: AgentConfig) -> AgentResult:
     # Hết max_steps — lấy câu trả lời cuối cùng
     try:
         data = _chat_request(
-            cfg.base_url, cfg.model, messages + [
+            cfg.base_url, cfg.model,
+            _compact_messages(messages, cfg.context_budget_chars) + [
                 {"role": "user", "content": "Tổng kết kết quả và đưa ra câu trả lời cuối cùng."}
             ],
             None, cfg.temperature, cfg.max_tokens, cfg.timeout, cfg.api_key
         )
         answer = data["choices"][0]["message"].get("content", "")
     except Exception:
-        answer = "[Đã đạt giới hạn bước, không có câu trả lời cuối]"
+        answer = ""
+
+    if not (answer or "").strip():
+        # Fallback: model trả rỗng → lấy suy nghĩ gần nhất để người dùng vẫn thấy tiến trình
+        for s in reversed(steps):
+            if (s.thought or "").strip():
+                answer = f"[Đã đạt giới hạn bước] Suy nghĩ cuối: {s.thought.strip()}"
+                break
+        else:
+            answer = "[Đã đạt giới hạn bước — xem chi tiết các bước đã thực hiện]"
 
     return AgentResult(answer=answer, steps=steps, model=cfg.model, elapsed=time.time() - t0)
 
@@ -311,6 +481,9 @@ def _run_react(task: str, cfg: AgentConfig) -> AgentResult:
 
     for step_num in range(1, cfg.max_steps + 1):
         step = AgentStep(step=step_num)
+
+        # Nén ngữ cảnh khi hội thoại dài
+        messages = _compact_messages(messages, cfg.context_budget_chars)
 
         try:
             data = _chat_request(
@@ -352,6 +525,10 @@ def _run_react(task: str, cfg: AgentConfig) -> AgentResult:
             tool_name, tool_args = _parse_action(action_text)
             if tool_name:
                 result = call_tool(tool_name, tool_args, policy=cfg.policy)
+                if cfg.auto_verify:
+                    note = _auto_verify_note(tool_name, tool_args)
+                    if note:
+                        result += note
                 tc = ToolCall(id=f"react_{step_num}", name=tool_name, arguments=tool_args, result=result)
                 step.tool_calls.append(tc)
                 step.observation = result
@@ -559,6 +736,9 @@ def run_agent(
     # Tạo permission policy
     from tools.permissions import make_policy
     policy = make_policy(permission_mode, allow_tools, deny_tools)
+
+    # Task nhiều bước → nhắc agent lập kế hoạch todo trước khi bắt tay làm
+    task = task + _planning_hint(task, max_steps)
 
     # Ở chế độ plan, nhắc model rằng nó chỉ được lập kế hoạch
     if permission_mode in ("plan", "readonly"):
