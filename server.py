@@ -44,6 +44,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
 
+import bds_assistant
 from computer_use import (
     execute_computer_command,
     get_computer_state,
@@ -1221,6 +1222,20 @@ async def _ollama_chat_proxy(req: "ChatRequest", alias_name: str, target_name: s
                 "message": {"role": "assistant", "content": identity_answer},
                 "done": True,
                 "done_reason": "identity",
+            }
+
+    if alias_name == "minion":
+        # Lệnh BĐS chuyên sâu: quản lý khách hàng + soạn tin gọi khách
+        bds_answer = await bds_assistant.handle(question, _fetch_house_rag_context)
+        if bds_answer is not None:
+            if req.stream:
+                return await _stream_text_answer(alias_name, bds_answer)
+            return {
+                "model": alias_name,
+                "created_at": datetime.now(tz=timezone.utc).isoformat(),
+                "message": {"role": "assistant", "content": bds_answer},
+                "done": True,
+                "done_reason": "bds_assistant",
             }
 
     if alias_name == "minion" and _is_house_query(question):
