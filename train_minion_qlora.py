@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -53,6 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--eval-ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--report", default="", help="Nơi lưu báo cáo train JSON (tùy chọn)")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -150,10 +153,28 @@ def main() -> int:
         quantization_config=quantization,
         peft_config=lora,
     )
-    trainer.train()
+    train_result = trainer.train()
+    eval_metrics = trainer.evaluate()
     trainer.save_model(args.out)
     if trainer.processing_class is not None:
         trainer.processing_class.save_pretrained(args.out)
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report = {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "base_model": args.base,
+            "adapter_path": str(Path(args.out).resolve()),
+            "dataset": str(data_path.resolve()),
+            "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
+            "examples": count,
+            "gpu": torch.cuda.get_device_name(0),
+            "configuration": plan,
+            "train_metrics": train_result.metrics,
+            "eval_metrics": eval_metrics,
+        }
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Đã lưu báo cáo train: {report_path}")
     print(f"Đã lưu LoRA adapter của Minion tại: {args.out}")
     return 0
 

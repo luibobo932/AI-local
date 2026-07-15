@@ -256,18 +256,26 @@ powershell -ExecutionPolicy Bypass -File .\setup_minion_gpu.ps1
 
 ### Chuẩn bị dữ liệu và QLoRA
 
-Dữ liệu phải là JSONL hội thoại có trường `messages`; xem `data/minion_sft_sample.jsonl`.
+Dữ liệu phải là JSONL hội thoại có trường `messages`; bộ seed hiện tại được tạo từ dữ liệu cũ và các mẫu đã biên soạn riêng cho Minion.
 
 ```powershell
-# Chỉ kiểm tra dữ liệu/cấu hình, chưa train
-.\.venv-cuda\Scripts\python.exe train_minion_qlora.py `
-  --data data\minion_sft_sample.jsonl --dry-run
+# Tạo và kiểm định bộ seed (119 ví dụ, gồm hội thoại và tool-calling)
+python data\build_minion_sft.py
+python data\validate_minion_sft.py
 
-# Chỉ train khi đã có dữ liệu thật được review
+# Chỉ kiểm tra cấu hình, chưa train
+.\.venv-cuda\Scripts\python.exe train_minion_qlora.py `
+  --data data\minion_sft_seed.jsonl --dry-run
+
+# Train adapter seed và lưu báo cáo đo lường
 .\.venv-cuda\Scripts\python.exe train_minion_qlora.py `
   --base Qwen/Qwen3-0.6B `
-  --data data\minion_sft.jsonl `
-  --out models\minion-sft-v1
+  --data data\minion_sft_seed.jsonl `
+  --out models\minion-sft-seed-v1 `
+  --max-length 512 `
+  --report reports\minion_sft_seed_v1.json
 ```
+
+Thư mục `models/` không đẩy lên GitHub vì adapter có dung lượng lớn. GitHub lưu mã nguồn, dữ liệu seed và báo cáo train để có thể tái tạo model.
 
 Không train bản chính bằng file sample. File sample chỉ dùng kiểm tra schema.
