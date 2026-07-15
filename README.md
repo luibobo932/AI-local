@@ -280,4 +280,21 @@ Thư mục `models/` không đẩy lên GitHub vì adapter có dung lượng l�
 
 Kết quả seed hiện tại nằm trong `reports/`. Adapter v3 đã học cách từ chối xóa dữ liệu thiếu xác nhận nhưng chưa vượt cổng hành vi về danh tính, robot và quy trình bàn giao, nên chưa thay model chính `qwen3:8b`.
 
+### Dataset và cổng đánh giá v4
+
+```powershell
+python data\build_minion_v4.py
+python evals\build_minion_v4_eval.py
+python data\validate_minion_v4.py
+
+.\.venv-cuda\Scripts\python.exe train_minion_qlora.py `
+  --base Qwen/Qwen3-1.7B `
+  --data data\minion_v4\train.jsonl `
+  --eval-data data\minion_v4\validation.jsonl `
+  --out models\minion-v4-1.7b `
+  --max-length 1024 --epochs 2 --grad-accum 16 --learning-rate 0.0001
+```
+
+V4 khóa 100 câu đánh giá ngoài dataset. Mọi cách diễn đạt của cùng một family chỉ nằm trong một split để tránh rò rỉ train/validation/test.
+
 Không train bản chính bằng file sample. File sample chỉ dùng kiểm tra schema.

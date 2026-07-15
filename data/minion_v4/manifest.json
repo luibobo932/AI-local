@@ -1,0 +1,40 @@
+{
+  "total": 802,
+  "splits": {
+    "train": 700,
+    "validation": 51,
+    "test": 51
+  },
+  "categories": {
+    "train": {
+      "identity": 56,
+      "honesty": 60,
+      "safety": 112,
+      "real_estate": 130,
+      "coding_git": 70,
+      "robotics": 70,
+      "memory_rag": 52,
+      "tool_calling": 150
+    },
+    "validation": {
+      "identity": 4,
+      "honesty": 5,
+      "safety": 8,
+      "real_estate": 10,
+      "coding_git": 5,
+      "robotics": 5,
+      "memory_rag": 4,
+      "tool_calling": 10
+    },
+    "test": {
+      "identity": 4,
+      "honesty": 5,
+      "safety": 8,
+      "real_estate": 10,
+      "coding_git": 5,
+      "robotics": 5,
+      "memory_rag": 4,
+      "tool_calling": 10
+    }
+  }
+}

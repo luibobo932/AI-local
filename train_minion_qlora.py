@@ -45,6 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SFT QLoRA cho Minion")
     parser.add_argument("--base", default="Qwen/Qwen3-0.6B")
     parser.add_argument("--data", required=True, help="File JSONL có cột messages và tools tùy chọn")
+    parser.add_argument("--eval-data", default="", help="File validation JSONL đã khóa; bỏ trống để tự chia")
     parser.add_argument("--out", default="models/minion-sft")
     parser.add_argument("--max-length", type=int, default=1024)
     parser.add_argument("--batch-size", type=int, default=1)
@@ -79,11 +80,24 @@ def main() -> int:
     if count < 10 and not args.dry_run:
         print(f"Chỉ có {count} ví dụ. Cần tối thiểu 10 ví dụ để tránh train nhầm dữ liệu mẫu.")
         return 1
+    eval_count = 0
+    if args.eval_data:
+        eval_path = Path(args.eval_data)
+        if not eval_path.exists():
+            print(f"Không tìm thấy validation data: {eval_path}")
+            return 1
+        eval_count, eval_errors = validate_dataset(eval_path)
+        if eval_errors:
+            print("Validation data chưa đạt:")
+            for error in eval_errors[:50]:
+                print(f"- {error}")
+            return 1
 
     plan = {
         "base": args.base,
         "data": str(data_path),
         "examples": count,
+        "eval_examples": eval_count or None,
         "output": args.out,
         "qlora": "4-bit NF4 + double quant",
         "max_length": args.max_length,
@@ -111,7 +125,13 @@ def main() -> int:
         return 1
 
     dataset = load_dataset("json", data_files=str(data_path), split="train")
-    split = dataset.train_test_split(test_size=args.eval_ratio, seed=args.seed)
+    if args.eval_data:
+        train_dataset = dataset
+        eval_dataset = load_dataset("json", data_files=args.eval_data, split="train")
+    else:
+        split = dataset.train_test_split(test_size=args.eval_ratio, seed=args.seed)
+        train_dataset = split["train"]
+        eval_dataset = split["test"]
     quantization = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -150,8 +170,8 @@ def main() -> int:
     trainer = SFTTrainer(
         model=args.base,
         args=training,
-        train_dataset=split["train"],
-        eval_dataset=split["test"],
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         quantization_config=quantization,
         peft_config=lora,
     )
