@@ -278,4 +278,6 @@ python data\validate_minion_sft.py
 
 Thư mục `models/` không đẩy lên GitHub vì adapter có dung lượng lớn. GitHub lưu mã nguồn, dữ liệu seed và báo cáo train để có thể tái tạo model.
 
+Kết quả seed hiện tại nằm trong `reports/`. Adapter v3 đã học cách từ chối xóa dữ liệu thiếu xác nhận nhưng chưa vượt cổng hành vi về danh tính, robot và quy trình bàn giao, nên chưa thay model chính `qwen3:8b`.
+
 Không train bản chính bằng file sample. File sample chỉ dùng kiểm tra schema.

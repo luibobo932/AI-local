@@ -113,7 +113,7 @@ def main() -> int:
     tokenizer = AutoTokenizer.from_pretrained(args.adapter)
     base_model = AutoModelForCausalLM.from_pretrained(
         args.base,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map="cuda",
     )
     base_model.eval()
