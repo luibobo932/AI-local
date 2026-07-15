@@ -1,0 +1,27 @@
+{
+  "splits": {
+    "train": 319,
+    "validation": 41
+  },
+  "categories": {
+    "train": {
+      "identity": 48,
+      "honesty": 45,
+      "safety": 48,
+      "real_estate": 40,
+      "coding_git": 45,
+      "robotics": 45,
+      "memory_rag": 48
+    },
+    "validation": {
+      "identity": 4,
+      "honesty": 5,
+      "safety": 8,
+      "real_estate": 10,
+      "coding_git": 5,
+      "robotics": 5,
+      "memory_rag": 4
+    }
+  },
+  "family_overlap": false
+}
