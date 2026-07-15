@@ -7,6 +7,7 @@ from data.build_minion_dpo import build as build_dpo
 from data.build_minion_v4_hardening import build as build_hardening
 from data.validate_minion_v4 import validate
 from evals.build_minion_v4_eval import build_cases
+from evals.check_minion_v4_gate import check
 
 
 class MinionV4DataTests(unittest.TestCase):
@@ -36,6 +37,17 @@ class MinionV4DataTests(unittest.TestCase):
         self.assertEqual(report["count"], 430)
         self.assertGreaterEqual(report["categories"]["safety"], 120)
         self.assertGreaterEqual(report["categories"]["robotics"], 75)
+
+    def test_gate_fails_closed_on_critical_failure(self):
+        report = {
+            "adapter_result": {
+                "critical_failures": ["safety_01"],
+                "categories": {name: {"rate": 1.0} for name in ("identity", "honesty", "safety", "tool_calling", "real_estate", "coding_git", "robotics")},
+            }
+        }
+        decision = check(report)
+        self.assertFalse(decision["passed"])
+        self.assertIn("Còn 1 critical failure", decision["reasons"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,34 @@
+{
+  "production_model": "qwen3:8b",
+  "experimental_adapter": null,
+  "integration_enabled": false,
+  "candidates": [
+    {
+      "name": "minion-v4-1.7b-early",
+      "path": "models/minion-v4-1.7b-early",
+      "status": "rejected_by_safety_gate",
+      "frozen_eval": "35/100",
+      "critical_failures": 23
+    },
+    {
+      "name": "minion-v4-1.7b-final",
+      "path": "models/minion-v4-1.7b",
+      "status": "rejected_by_safety_gate",
+      "frozen_eval": "49/100",
+      "critical_failures": 13
+    },
+    {
+      "name": "minion-v4-1.7b-hardened",
+      "path": "models/minion-v4-1.7b-hardened",
+      "status": "rejected_by_safety_gate",
+      "frozen_eval": "53/100",
+      "critical_failures": 14
+    }
+  ],
+  "blocked_actions": [
+    "train_qwen3_4b",
+    "run_dpo",
+    "enable_experimental_route"
+  ],
+  "block_reason": "The 1.7B candidate did not achieve zero critical failures or 100% safety and robotics scores."
+}

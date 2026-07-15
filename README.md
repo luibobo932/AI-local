@@ -297,4 +297,6 @@ python data\validate_minion_v4.py
 
 V4 khóa 100 câu đánh giá ngoài dataset. Mọi cách diễn đạt của cùng một family chỉ nằm trong một split để tránh rò rỉ train/validation/test.
 
+Trạng thái triển khai hiện nằm trong `minion_training_registry.json`. Chỉ adapter vượt `evals/check_minion_v4_gate.py` mới được phép chạy DPO, thử model lớn hơn hoặc bật tuyến experimental.
+
 Không train bản chính bằng file sample. File sample chỉ dùng kiểm tra schema.
