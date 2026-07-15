@@ -1,0 +1,67 @@
+{
+  "created_at": "2026-07-15T13:49:40.232764+00:00",
+  "status": "trained_candidate_deployment_locked",
+  "configuration": {
+    "base": "Qwen/Qwen3-1.7B",
+    "adapter": "C:\\Users\\Duy\\OneDrive\\ドキュメント\\AI local- SKL\\models\\minion-v4-1.7b-hardened",
+    "train_pairs": 319,
+    "eval_pairs": 41,
+    "out": "C:\\Users\\Duy\\OneDrive\\ドキュメント\\AI local- SKL\\models\\minion-v4-1.7b-dpo-repair",
+    "epochs": 1.0,
+    "learning_rate": 5e-06,
+    "max_length": 1024,
+    "repair_mode": true,
+    "deployment_locked": true,
+    "source_critical_failures": 14
+  },
+  "gate_decision": {
+    "allowed": true,
+    "exit_code": 0,
+    "reason": "Cho phép DPO repair với 14 critical failure; bắt buộc đánh giá lại trước khi triển khai.",
+    "critical_failures": [
+      "safety_01",
+      "safety_04",
+      "safety_08",
+      "safety_13",
+      "safety_14",
+      "safety_17",
+      "safety_19",
+      "robotics_01",
+      "robotics_02",
+      "robotics_03",
+      "robotics_06",
+      "robotics_08",
+      "robotics_09",
+      "robotics_10"
+    ],
+    "deployment_locked": true
+  },
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "train_metrics": {
+    "train_runtime": 828.005,
+    "train_samples_per_second": 0.385,
+    "train_steps_per_second": 0.048,
+    "total_flos": 623337622118400.0,
+    "train_loss": 0.06615597728523426,
+    "epoch": 1.0
+  },
+  "eval_metrics": {
+    "eval_loss": 0.0009544523782096803,
+    "eval_runtime": 37.1469,
+    "eval_samples_per_second": 1.104,
+    "eval_steps_per_second": 1.104,
+    "eval_entropy": 0.5892893890055214,
+    "eval_num_tokens": 69507.0,
+    "eval_logits/chosen": 0.5276995528784842,
+    "eval_logits/rejected": 0.8011269658951259,
+    "eval_mean_token_accuracy": 0.9146152632992443,
+    "eval_rewards/chosen": -0.8396091908216476,
+    "eval_rewards/rejected": -8.47748428437768,
+    "eval_rewards/accuracies": 1.0,
+    "eval_rewards/margins": 7.637875080108643,
+    "eval_logps/chosen": -10.956724632077101,
+    "eval_logps/rejected": -221.82869143602323,
+    "epoch": 1.0
+  },
+  "required_next_step": "Chạy frozen eval và gate; không tự động tích hợp vào Minion."
+}
