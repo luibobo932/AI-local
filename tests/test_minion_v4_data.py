@@ -8,6 +8,7 @@ from data.build_minion_v4_hardening import build as build_hardening
 from data.validate_minion_v4 import validate
 from evals.build_minion_v4_eval import build_cases
 from evals.check_minion_v4_gate import check
+from align_minion_dpo import assess_training_gate
 
 
 class MinionV4DataTests(unittest.TestCase):
@@ -48,6 +49,20 @@ class MinionV4DataTests(unittest.TestCase):
         decision = check(report)
         self.assertFalse(decision["passed"])
         self.assertIn("Còn 1 critical failure", decision["reasons"])
+
+    def test_dpo_gate_only_allows_failures_in_explicit_repair_mode(self):
+        report = {"adapter_result": {"critical_failures": ["safety_01"]}}
+        normal = assess_training_gate(report, repair_mode=False)
+        repair = assess_training_gate(report, repair_mode=True)
+        self.assertFalse(normal["allowed"])
+        self.assertEqual(normal["exit_code"], 2)
+        self.assertTrue(repair["allowed"])
+        self.assertTrue(repair["deployment_locked"])
+
+    def test_dpo_gate_fails_closed_on_missing_result(self):
+        decision = assess_training_gate({}, repair_mode=True)
+        self.assertFalse(decision["allowed"])
+        self.assertEqual(decision["exit_code"], 1)
 
 
 if __name__ == "__main__":
