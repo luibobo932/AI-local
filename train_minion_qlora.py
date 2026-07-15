@@ -56,6 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-ratio", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--report", default="", help="Nơi lưu báo cáo train JSON (tùy chọn)")
+    parser.add_argument("--resume-from-checkpoint", default="", help="Checkpoint Trainer để tiếp tục một lượt train")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -92,6 +93,7 @@ def main() -> int:
         "learning_rate": args.learning_rate,
         "lora_r": args.lora_r,
         "lora_alpha": args.lora_alpha,
+        "resume_from_checkpoint": args.resume_from_checkpoint or None,
     }
     print(json.dumps(plan, ensure_ascii=False, indent=2))
     if args.dry_run:
@@ -153,7 +155,7 @@ def main() -> int:
         quantization_config=quantization,
         peft_config=lora,
     )
-    train_result = trainer.train()
+    train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint or None)
     eval_metrics = trainer.evaluate()
     trainer.save_model(args.out)
     if trainer.processing_class is not None:
