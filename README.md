@@ -259,7 +259,7 @@ powershell -ExecutionPolicy Bypass -File .\setup_minion_gpu.ps1
 Dữ liệu phải là JSONL hội thoại có trường `messages`; bộ seed hiện tại được tạo từ dữ liệu cũ và các mẫu đã biên soạn riêng cho Minion.
 
 ```powershell
-# Tạo và kiểm định bộ seed (119 ví dụ, gồm hội thoại và tool-calling)
+# Tạo và kiểm định bộ seed (142 ví dụ, gồm hội thoại, an toàn và tool-calling)
 python data\build_minion_sft.py
 python data\validate_minion_sft.py
 

@@ -1,0 +1,41 @@
+{
+  "created_at": "2026-07-15T03:50:34.588350+00:00",
+  "base_model": "Qwen/Qwen3-0.6B",
+  "adapter_path": "models\\minion-sft-seed-v1",
+  "dataset": "data\\minion_sft_seed.jsonl",
+  "dataset_sha256": "800c17e70eb2d742ce1b684394ee319a252b358e9d1979f27e52955ced113934",
+  "examples": 119,
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "configuration": {
+    "base": "Qwen/Qwen3-0.6B",
+    "data": "data\\minion_sft_seed.jsonl",
+    "examples": 119,
+    "output": "models\\minion-sft-seed-v1",
+    "qlora": "4-bit NF4 + double quant",
+    "max_length": 512,
+    "batch_size": 1,
+    "gradient_accumulation": 8,
+    "epochs": 3.0,
+    "learning_rate": 0.0002,
+    "lora_r": 16,
+    "lora_alpha": 32
+  },
+  "train_metrics": {
+    "train_runtime": 609.6627,
+    "train_samples_per_second": 0.527,
+    "train_steps_per_second": 0.069,
+    "total_flos": 103825244160000.0,
+    "train_loss": 1.4700097668738592,
+    "epoch": 3.0
+  },
+  "eval_metrics": {
+    "eval_loss": 2.290468454360962,
+    "eval_runtime": 5.4115,
+    "eval_samples_per_second": 2.218,
+    "eval_steps_per_second": 2.218,
+    "eval_entropy": 1.2683560450871785,
+    "eval_num_tokens": 38406.0,
+    "eval_mean_token_accuracy": 0.6034070352713267,
+    "epoch": 3.0
+  }
+}

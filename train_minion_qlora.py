@@ -164,8 +164,8 @@ def main() -> int:
         report = {
             "created_at": datetime.now(timezone.utc).isoformat(),
             "base_model": args.base,
-            "adapter_path": str(Path(args.out).resolve()),
-            "dataset": str(data_path.resolve()),
+            "adapter_path": str(Path(args.out)),
+            "dataset": str(data_path),
             "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
             "examples": count,
             "gpu": torch.cuda.get_device_name(0),
