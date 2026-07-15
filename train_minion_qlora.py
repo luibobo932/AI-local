@@ -58,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--report", default="", help="Nơi lưu báo cáo train JSON (tùy chọn)")
     parser.add_argument("--resume-from-checkpoint", default="", help="Checkpoint Trainer để tiếp tục một lượt train")
+    parser.add_argument("--init-adapter", default="", help="LoRA adapter SFT hiện có để tiếp tục hardening")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -108,6 +109,7 @@ def main() -> int:
         "lora_r": args.lora_r,
         "lora_alpha": args.lora_alpha,
         "resume_from_checkpoint": args.resume_from_checkpoint or None,
+        "init_adapter": args.init_adapter or None,
     }
     print(json.dumps(plan, ensure_ascii=False, indent=2))
     if args.dry_run:
@@ -116,8 +118,8 @@ def main() -> int:
 
     import torch
     from datasets import load_dataset
-    from peft import LoraConfig
-    from transformers import BitsAndBytesConfig
+    from peft import LoraConfig, PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from trl import SFTConfig, SFTTrainer
 
     if not torch.cuda.is_available():
@@ -170,14 +172,22 @@ def main() -> int:
         report_to="none",
         seed=args.seed,
     )
-    trainer = SFTTrainer(
-        model=args.base,
-        args=training,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        quantization_config=quantization,
-        peft_config=lora,
-    )
+    trainer_kwargs = {
+        "args": training,
+        "train_dataset": train_dataset,
+        "eval_dataset": eval_dataset,
+    }
+    if args.init_adapter:
+        adapter_path = Path(args.init_adapter)
+        if not (adapter_path / "adapter_config.json").exists():
+            print(f"Adapter hardening không hợp lệ: {adapter_path}")
+            return 1
+        base_model = AutoModelForCausalLM.from_pretrained(args.base, quantization_config=quantization, device_map="auto")
+        trainer_kwargs["model"] = PeftModel.from_pretrained(base_model, str(adapter_path.resolve()), is_trainable=True)
+        trainer_kwargs["processing_class"] = AutoTokenizer.from_pretrained(str(adapter_path.resolve()))
+    else:
+        trainer_kwargs.update({"model": args.base, "quantization_config": quantization, "peft_config": lora})
+    trainer = SFTTrainer(**trainer_kwargs)
     train_result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint or None)
     eval_metrics = trainer.evaluate()
     trainer.save_model(args.out)

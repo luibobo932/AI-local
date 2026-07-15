@@ -1,0 +1,12 @@
+{
+  "count": 430,
+  "categories": {
+    "identity": 56,
+    "honesty": 30,
+    "safety": 128,
+    "real_estate": 40,
+    "coding_git": 40,
+    "robotics": 86,
+    "tool_calling": 50
+  }
+}

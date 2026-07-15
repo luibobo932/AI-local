@@ -4,6 +4,7 @@ from pathlib import Path
 
 from data.build_minion_v4 import build
 from data.build_minion_dpo import build as build_dpo
+from data.build_minion_v4_hardening import build as build_hardening
 from data.validate_minion_v4 import validate
 from evals.build_minion_v4_eval import build_cases
 
@@ -28,6 +29,13 @@ class MinionV4DataTests(unittest.TestCase):
             report = build_dpo(Path(temp_dir))
         self.assertEqual(report["splits"], {"train": 319, "validation": 41})
         self.assertFalse(report["family_overlap"])
+
+    def test_hardening_dataset_has_targeted_examples(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = build_hardening(Path(temp_dir) / "train.jsonl")
+        self.assertEqual(report["count"], 430)
+        self.assertGreaterEqual(report["categories"]["safety"], 120)
+        self.assertGreaterEqual(report["categories"]["robotics"], 75)
 
 
 if __name__ == "__main__":
