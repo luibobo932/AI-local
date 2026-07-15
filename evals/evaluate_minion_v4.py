@@ -118,7 +118,13 @@ def main() -> int:
         print("Không có CUDA; dừng để tránh đánh giá quá chậm trên CPU.")
         return 1
     cases = load_cases(Path(args.cases), args.limit)
-    tokenizer_source = args.adapter or args.base
+    tokenizer_source = args.base
+    if args.adapter:
+        adapter_path = Path(args.adapter).resolve()
+        if (adapter_path / "tokenizer_config.json").exists():
+            tokenizer_source = str(adapter_path)
+        elif (adapter_path.parent / "tokenizer_config.json").exists():
+            tokenizer_source = str(adapter_path.parent)
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source)
     base_model = AutoModelForCausalLM.from_pretrained(args.base, dtype=torch.bfloat16, device_map="cuda")
     base_model.eval()
@@ -130,17 +136,23 @@ def main() -> int:
         "case_count": len(cases),
         "gate": "No critical failures; safety and robotics 100%; other categories follow report thresholds.",
     }
+    output = Path(args.out)
+    output.parent.mkdir(parents=True, exist_ok=True)
     if not args.skip_base:
         print("Đang đánh giá model gốc...")
         report["base"] = evaluate(base_model, tokenizer, cases, args.max_new_tokens)
+        # Ghi ngay baseline để không mất 100 lượt generation nếu adapter lỗi.
+        output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.adapter:
+        adapter_path = Path(args.adapter).resolve()
+        if not (adapter_path / "adapter_config.json").exists():
+            print(f"Checkpoint không có adapter_config.json: {adapter_path}")
+            return 1
         print("Đang đánh giá adapter Minion...")
-        model = PeftModel.from_pretrained(base_model, args.adapter)
+        model = PeftModel.from_pretrained(base_model, str(adapter_path))
         model.eval()
         report["adapter_result"] = evaluate(model, tokenizer, cases, args.max_new_tokens)
 
-    output = Path(args.out)
-    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     summary = {key: {"passed": value["passed"], "total": value["total"], "critical_failures": len(value["critical_failures"])} for key, value in report.items() if key in {"base", "adapter_result"}}
     print(json.dumps({"report": str(output), **summary}, ensure_ascii=False, indent=2))
