@@ -6,5 +6,24 @@
     "."
   ],
   "default_model": "minion",
-  "screenshot_dir": "output/computer-use"
+  "screenshot_dir": "output/computer-use",
+  "model_router": {
+    "enabled": true,
+    "general_model": "qwen3:8b",
+    "code_model": "qwen2.5-coder:latest",
+    "vietnamese_model": "phogpt-local",
+    "embedding_model": "nomic-embed-text:latest"
+  },
+  "memory": {
+    "enabled": true,
+    "database_path": "data/minion_memory.db",
+    "max_results": 5,
+    "min_score": 0.12
+  },
+  "agent": {
+    "mode": "tool_calling",
+    "model": "qwen3:8b",
+    "fallback_to_rules": true,
+    "temperature": 0.1
+  }
 }

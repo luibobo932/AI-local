@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#f5c542">
-<title>Minion Chat - Trợ lý nhà phố</title>
+<title>Minion Chat - AI local riêng của Duy</title>
 <link rel="icon" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"%3E%3Crect width="128" height="128" rx="28" fill="%23f5c542"/%3E%3Cpath d="M24 77h80v28c0 11-9 20-20 20H44c-11 0-20-9-20-20V77Z" fill="%232f6fb3"/%3E%3Crect x="17" y="43" width="94" height="16" rx="8" fill="%23242933"/%3E%3Ccircle cx="64" cy="52" r="26" fill="%23cfd7df"/%3E%3Ccircle cx="64" cy="52" r="18" fill="%23fff7d6"/%3E%3Ccircle cx="64" cy="52" r="8" fill="%23242933"/%3E%3Cpath d="M47 86c8 7 26 7 34 0" stroke="%23242933" stroke-width="7" stroke-linecap="round" fill="none"/%3E%3C/svg%3E'>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -441,7 +441,7 @@
         </svg>
         <div>
           <h1>Minion Chat</h1>
-          <p>Trợ lý nhà phố local</p>
+          <p>Trợ lý AI local riêng của anh</p>
         </div>
       </div>
 
@@ -466,10 +466,11 @@
         <div class="window-dots"><span></span><span></span><span></span></div>
         <div class="title-group">
           <h2>Chat với Minion</h2>
-          <p>Hỏi nhanh về nhà phố, lọc căn theo quận, giá, ngang, diện tích.</p>
+          <p>Nhà phố, lập trình, công cụ doanh nghiệp và trí nhớ local.</p>
         </div>
         <div class="toolbar">
           <button class="ghost-btn" id="statusBtn" type="button">Trạng thái</button>
+          <button class="ghost-btn" id="rememberBtn" type="button">Ghi nhớ</button>
           <button class="stop-btn" id="stopAgent" type="button" disabled>Dừng</button>
           <label class="cu-toggle" id="computerUseToggle">
             <input id="computerUseEnabled" type="checkbox">
@@ -485,6 +486,7 @@
         <div class="drawer-item"><strong id="drawerModel">Model</strong><span>minion</span></div>
         <div class="drawer-item"><strong id="drawerWindow">Cửa sổ</strong><span>-</span></div>
         <div class="drawer-item"><strong id="drawerAgent">Agent</strong><span>Chưa chạy</span></div>
+        <div class="drawer-item"><strong id="drawerMemory">Trí nhớ</strong><span>0 mục</span></div>
       </div>
 
       <div id="chat">
@@ -493,7 +495,7 @@
             <use href="#mascot-symbol"></use>
           </svg>
           <h3>Minion sẵn sàng</h3>
-          <p>Gõ nhu cầu của khách hoặc hỏi danh sách căn. Bot sẽ ưu tiên trả lời ngắn, dễ copy để gọi khách.</p>
+          <p>Giao việc, hỏi dữ liệu hoặc lưu điều quan trọng. Minion sẽ chọn model và công cụ phù hợp.</p>
         </div>
       </div>
 
@@ -534,6 +536,7 @@ const welcome = document.getElementById('welcome');
 const computerUseToggle = document.getElementById('computerUseToggle');
 const computerUseEnabled = document.getElementById('computerUseEnabled');
 const statusBtn = document.getElementById('statusBtn');
+const rememberBtn = document.getElementById('rememberBtn');
 const stopAgentBtn = document.getElementById('stopAgent');
 const statusDrawer = document.getElementById('statusDrawer');
 const sideActiveWindow = document.getElementById('sideActiveWindow');
@@ -542,6 +545,7 @@ const drawerServer = document.getElementById('drawerServer');
 const drawerModel = document.getElementById('drawerModel');
 const drawerWindow = document.getElementById('drawerWindow');
 const drawerAgent = document.getElementById('drawerAgent');
+const drawerMemory = document.getElementById('drawerMemory');
 let history = [];
 let busy = false;
 let currentAgentRunId = null;
@@ -550,10 +554,10 @@ let stopRequested = false;
 let lastError = '';
 
 const MINION_SYSTEM_PROMPT = [
-  "Bạn là Minion, trợ lý AI local do Duy phát triển.",
+  "Bạn là Minion, trợ lý AI local riêng do Duy phát triển.",
   "Luôn nhận mình tên là Minion. Khi được hỏi ai tạo ra hoặc phát triển bạn, trả lời là Duy.",
-  "Bạn hỗ trợ công việc nhà phố TP.HCM: tìm căn, lọc dữ liệu, tóm tắt thông tin để gọi khách.",
-  "Trả lời tiếng Việt có dấu đầy đủ, ngắn gọn, thực dụng, không bịa thông tin."
+  "Bạn hỗ trợ nhà phố TP.HCM, lập trình, công cụ doanh nghiệp, nghiên cứu máy móc và robot.",
+  "Trả lời tiếng Việt có dấu đầy đủ, thực dụng, dùng công cụ để kiểm chứng và không bịa thông tin."
 ].join(" ");
 
 const samples = [
@@ -667,6 +671,24 @@ statusBtn.onclick = () => {
   updateStatus();
 };
 
+rememberBtn.onclick = async () => {
+  const content = window.prompt('Anh muốn Minion ghi nhớ điều gì?');
+  if (!content || !content.trim()) return;
+  try {
+    const response = await fetch('/api/memory/remember', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: content.trim(), category: 'preference', source: 'user' })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || 'Không lưu được trí nhớ');
+    addBubble('bot', 'Minion đã ghi nhớ local: ' + payload.item.content);
+    updateStatus();
+  } catch (error) {
+    addBubble('bot', 'Không lưu được trí nhớ: ' + error);
+  }
+};
+
 stopAgentBtn.onclick = async () => {
   if (!currentAgentRunId) return;
   try {
@@ -690,18 +712,21 @@ async function updateStatus(agentLabel = null) {
   drawerModel.nextElementSibling.textContent = modelSel.value || 'minion';
   drawerAgent.nextElementSibling.textContent = agentLabel || (currentAgentRunId ? currentAgentRunId.slice(0, 8) : 'Chưa chạy');
   try {
-    const [healthResp, stateResp] = await Promise.all([
+    const [healthResp, stateResp, memoryResp] = await Promise.all([
       fetch('/api/health'),
-      fetch('/api/computer-use/state')
+      fetch('/api/computer-use/state'),
+      fetch('/api/memory?limit=1')
     ]);
     const health = await healthResp.json();
     const state = await stateResp.json();
+    const memory = await memoryResp.json();
     drawerServer.nextElementSibling.textContent = health.status === 'ok' ? 'OK' : 'Không rõ';
     const active = state.active_window || '-';
     const cursor = state.cursor ? `${state.cursor.x}, ${state.cursor.y}` : '-';
     sideActiveWindow.textContent = active;
     sideCursor.textContent = cursor;
     drawerWindow.nextElementSibling.textContent = active;
+    drawerMemory.nextElementSibling.textContent = `${memory.total || 0} mục`;
   } catch (error) {
     lastError = String(error);
     drawerServer.nextElementSibling.textContent = 'Lỗi kết nối';

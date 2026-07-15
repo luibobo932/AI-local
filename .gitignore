@@ -3,6 +3,9 @@ models/
 data/*.bin
 data/*.txt
 data/*.pkl
+data/*.db
+data/*.db-shm
+data/*.db-wal
 __pycache__/
 *.pyc
 server-*.log
@@ -11,3 +14,4 @@ logs/
 output/
 .desktop-profile/
 .playwright-cli/
+.venv-cuda/

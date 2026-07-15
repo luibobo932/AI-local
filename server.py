@@ -35,6 +35,7 @@ import time
 import unicodedata
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import AsyncIterator
 
 import httpx
@@ -59,6 +60,9 @@ from computer_use import (
     workspace_search_result,
     workspace_status_result,
 )
+from minion_agent import run_tool_agent
+from minion_core import build_system_prompt, load_minion_config, route_model
+from minion_memory import MemoryStore
 from model.gpt import GPT, GPTConfig
 from model.hf_backend import HFModel, is_hf_model
 
@@ -72,15 +76,17 @@ _model_cache: dict[str, tuple] = {}   # name → (model, meta_or_None)
 _qa_cache: dict[str, str] | None = None
 _data_dir = "data"
 _checkpoints_dir = "checkpoints"
-_default_model = ""
+_minion_settings = load_minion_config()
+_default_model = str(_minion_settings.get("default_model") or "minion")
 _ollama_base_url = os.environ.get("AI_LOCAL_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 _supabase_env_paths = [
     r"D:\app bomtan\excel_supabase_sync\.env",
     r"D:\app bomtan\20260326\my_app-main\my_app-main\tooling\google_drive_supabase_sync\.env",
 ]
 _ollama_aliases = {
-    # Tên chính của bot local.
-    "minion": "phogpt-local",
+    # Tên chính tự định tuyến model theo nhiệm vụ.
+    "minion": str((_minion_settings.get("model_router") or {}).get("general_model") or "qwen3:8b"),
+    "minion-coder": str((_minion_settings.get("model_router") or {}).get("code_model") or "qwen2.5-coder:latest"),
     # PhoGPT bản GGUF quantized chạy qua Ollama, nhẹ hơn bản HF fp16.
     "phogpt": "phogpt-local",
     "phogpt:q4": "phogpt-local",
@@ -88,6 +94,141 @@ _ollama_aliases = {
 _house_all_limit = 5000
 _house_action_marker = "[[MINION_ACTIONS:"
 _agent_runs: dict[str, dict] = {}
+_memory_store_cache: MemoryStore | None = None
+
+
+def _memory_store() -> MemoryStore:
+    """Khởi tạo kho trí nhớ khi dùng lần đầu để import server không tạo file ngoài ý muốn."""
+    global _memory_store_cache
+    if _memory_store_cache is None:
+        memory_cfg = _minion_settings.get("memory") or {}
+        database_path = str(memory_cfg.get("database_path") or "data/minion_memory.db")
+        _memory_store_cache = MemoryStore(database_path)
+    return _memory_store_cache
+
+
+async def _ollama_embedding(text: str) -> tuple[list[float] | None, str]:
+    """Tạo embedding local; lỗi Ollama không được làm hỏng chat hoặc ghi nhớ."""
+    model = str((_minion_settings.get("model_router") or {}).get("embedding_model") or "nomic-embed-text:latest")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{_ollama_base_url}/api/embed",
+                json={"model": model, "input": text},
+            )
+            response.raise_for_status()
+            embeddings = response.json().get("embeddings") or []
+            if embeddings and isinstance(embeddings[0], list):
+                return [float(value) for value in embeddings[0]], model
+    except (httpx.HTTPError, ValueError, TypeError):
+        pass
+    return None, ""
+
+
+async def _search_memory(query: str, limit: int | None = None) -> list[dict]:
+    memory_cfg = _minion_settings.get("memory") or {}
+    if not memory_cfg.get("enabled", True) or _memory_store().count() == 0:
+        return []
+    query_embedding, _ = await _ollama_embedding(query)
+    results = _memory_store().search(
+        query,
+        limit=limit or int(memory_cfg.get("max_results") or 5),
+        query_embedding=query_embedding,
+        min_score=float(memory_cfg.get("min_score") or 0.0),
+    )
+    return [item.to_dict() for item in results]
+
+
+async def _memory_context(query: str) -> str:
+    items = await _search_memory(query)
+    if not items:
+        return ""
+    return "\n".join(
+        f"- [{item['category']} | nguồn: {item['source']}] {item['content']}"
+        for item in items
+    )
+
+
+def _resolve_knowledge_path(path_text: str) -> Path:
+    """Chỉ cho nhập tài liệu nằm trong một workspace root đã cấu hình."""
+    candidate = Path(path_text).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    candidate = candidate.resolve()
+    roots = []
+    for root_text in _minion_settings.get("allowed_workspace_roots") or ["."]:
+        root = Path(str(root_text)).expanduser()
+        if not root.is_absolute():
+            root = Path.cwd() / root
+        roots.append(root.resolve())
+    if not any(candidate == root or root in candidate.parents for root in roots):
+        raise ValueError("File nằm ngoài workspace được phép.")
+    if not candidate.exists() or not candidate.is_file():
+        raise ValueError("Không tìm thấy file cần nhập.")
+    if candidate.suffix.lower() not in {".txt", ".md", ".json", ".jsonl", ".csv", ".py", ".js", ".ts"}:
+        raise ValueError("Định dạng chưa hỗ trợ. Dùng txt, md, json, jsonl, csv, py, js hoặc ts.")
+    if candidate.stat().st_size > 500_000:
+        raise ValueError("File lớn hơn 500 KB. Hãy chia tài liệu trước khi nhập.")
+    return candidate
+
+
+def _chunk_knowledge(text: str, chunk_size: int, overlap: int) -> list[str]:
+    chunk_size = max(400, min(int(chunk_size), 4000))
+    overlap = max(0, min(int(overlap), chunk_size // 3))
+    clean = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if not clean:
+        return []
+    chunks = []
+    start = 0
+    while start < len(clean) and len(chunks) < 300:
+        end = min(start + chunk_size, len(clean))
+        if end < len(clean):
+            boundary = max(clean.rfind("\n\n", start, end), clean.rfind(". ", start, end))
+            if boundary > start + (chunk_size // 2):
+                end = boundary + 1
+        chunk = clean[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= len(clean):
+            break
+        start = max(end - overlap, start + 1)
+    return chunks
+
+
+async def _ingest_knowledge(
+    path_text: str,
+    category: str = "knowledge",
+    chunk_size: int = 1600,
+    overlap: int = 200,
+) -> dict:
+    path = _resolve_knowledge_path(path_text)
+    text = await asyncio.to_thread(path.read_text, encoding="utf-8", errors="replace")
+    chunks = _chunk_knowledge(text, chunk_size, overlap)
+    if not chunks:
+        raise ValueError("File không có nội dung văn bản để nhập.")
+    source = f"file:{path.relative_to(Path.cwd()) if path.is_relative_to(Path.cwd()) else path}"
+    replaced = await asyncio.to_thread(_memory_store().delete_by_source, source)
+    items = []
+    for index, chunk in enumerate(chunks, start=1):
+        content = f"Tài liệu {path.name}, phần {index}/{len(chunks)}:\n{chunk}"
+        embedding, embedding_model = await _ollama_embedding(content)
+        item = await asyncio.to_thread(
+            _memory_store().add,
+            content,
+            category or "knowledge",
+            source,
+            0.6,
+            embedding,
+            embedding_model,
+        )
+        items.append(item.id)
+    return {
+        "path": str(path),
+        "source": source,
+        "chunks": len(items),
+        "replaced": replaced,
+        "ids": items,
+    }
 
 
 def _read_env_file(path: str) -> dict[str, str]:
@@ -1186,9 +1327,11 @@ async def _augment_messages_with_house_rag(alias_name: str, messages: list[dict]
 async def _ollama_chat_proxy(req: "ChatRequest", alias_name: str, target_name: str):
     """Chuyển request chat sang Ollama để chạy model mạnh hơn như PhoGPT."""
     payload = req.model_dump()
-    payload["model"] = target_name
     raw_messages = payload.get("messages") or []
     question = _last_user_message(raw_messages)
+    if alias_name == "minion":
+        target_name = route_model(question, _minion_settings, requested_model="minion")
+    payload["model"] = target_name
     computer_use_enabled = bool(req.options.get("computer_use_enabled"))
     if isinstance(payload.get("options"), dict):
         payload["options"].pop("computer_use_enabled", None)
@@ -1235,17 +1378,18 @@ async def _ollama_chat_proxy(req: "ChatRequest", alias_name: str, target_name: s
         }
 
     messages = await _augment_messages_with_house_rag(alias_name, raw_messages)
-    if target_name == "phogpt-local" and not any(m.get("role") == "system" for m in messages):
+    if alias_name == "minion":
+        memory_context = await _memory_context(question)
+        messages = [
+            {"role": "system", "content": build_system_prompt(memory_context)},
+            *[message for message in messages if message.get("role") != "system"],
+        ]
+    elif target_name == "phogpt-local" and not any(m.get("role") == "system" for m in messages):
         messages = [{
             "role": "system",
-            "content": (
-                "Bạn là Minion, trợ lý AI tiếng Việt chạy local cho môi giới nhà phố tại TP.HCM. "
-                "Trả lời tiếng Việt có dấu đầy đủ, thực dụng, ngắn gọn, có cấu trúc rõ khi nhiều ý. "
-                "Không bịa dữ liệu nhà, tiểu sử cá nhân, hoặc thông tin bạn không chắc. "
-                "Nếu thiếu dữ liệu thì nói thẳng là chưa có trong dữ liệu hiện tại."
-            ),
+            "content": build_system_prompt(),
         }] + messages
-        payload["messages"] = messages
+    payload["messages"] = messages
 
     if req.stream:
         async def stream_ollama() -> AsyncIterator[str]:
@@ -1295,6 +1439,7 @@ async def _ollama_chat_proxy(req: "ChatRequest", alias_name: str, target_name: s
             resp.raise_for_status()
             data = resp.json()
             data["model"] = alias_name
+            data["routed_model"] = target_name
             return data
     except httpx.HTTPStatusError as e:
         raise HTTPException(e.response.status_code, e.response.text)
@@ -1438,6 +1583,25 @@ class AgentRunRequest(BaseModel):
     enabled: bool = True
     max_steps: int = 8
     approval_token: str = ""
+
+
+class MemoryRememberRequest(BaseModel):
+    content: str
+    category: str = "general"
+    source: str = "user"
+    importance: float = 0.5
+
+
+class MemorySearchRequest(BaseModel):
+    query: str
+    limit: int = 5
+
+
+class KnowledgeIngestRequest(BaseModel):
+    path: str
+    category: str = "knowledge"
+    chunk_size: int = 1600
+    overlap: int = 200
 
 
 class WorkspaceFilesRequest(BaseModel):
@@ -2126,6 +2290,72 @@ async def api_status():
     return "Ollama is running"
 
 
+@app.get("/api/minion/config")
+async def api_minion_config():
+    """Trả cấu hình không chứa secret để UI và bài test biết năng lực đang bật."""
+    return {
+        "default_model": _default_model,
+        "model_router": _minion_settings.get("model_router") or {},
+        "memory": _minion_settings.get("memory") or {},
+        "agent": _minion_settings.get("agent") or {},
+        "permission_mode": _minion_settings.get("permission_mode") or "ask_when_risky",
+    }
+
+
+@app.get("/api/minion/route")
+async def api_minion_route(text: str, requested_model: str = "minion"):
+    selected = route_model(text, _minion_settings, requested_model=requested_model)
+    return {"requested_model": requested_model, "selected_model": selected}
+
+
+@app.get("/api/memory")
+async def api_memory_list(limit: int = 50, category: str = ""):
+    items = await asyncio.to_thread(_memory_store().list, limit, category)
+    total = await asyncio.to_thread(_memory_store().count)
+    return {"ok": True, "count": len(items), "total": total, "items": [item.to_dict() for item in items]}
+
+
+@app.post("/api/memory/remember")
+async def api_memory_remember(req: MemoryRememberRequest):
+    try:
+        embedding, embedding_model = await _ollama_embedding(req.content)
+        item = await asyncio.to_thread(
+            _memory_store().add,
+            req.content,
+            req.category,
+            req.source,
+            req.importance,
+            embedding,
+            embedding_model,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "message": "Đã lưu trí nhớ local.", "item": item.to_dict()}
+
+
+@app.post("/api/memory/search")
+async def api_memory_search(req: MemorySearchRequest):
+    items = await _search_memory(req.query, req.limit)
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@app.post("/api/knowledge/ingest")
+async def api_knowledge_ingest(req: KnowledgeIngestRequest):
+    try:
+        result = await _ingest_knowledge(req.path, req.category, req.chunk_size, req.overlap)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "message": f"Đã nhập {result['chunks']} phần tài liệu.", **result}
+
+
+@app.delete("/api/memory/{item_id}")
+async def api_memory_delete(item_id: str):
+    deleted = await asyncio.to_thread(_memory_store().delete, item_id)
+    if not deleted:
+        raise HTTPException(404, "Không tìm thấy trí nhớ.")
+    return {"ok": True, "message": "Đã xóa trí nhớ local.", "id": item_id}
+
+
 @app.get("/api/computer-use/state")
 async def api_computer_use_state():
     """Trạng thái computer-use hiện tại: màn hình, chuột, cửa sổ active."""
@@ -2137,6 +2367,185 @@ async def api_computer_use_command(req: ComputerCommandRequest):
     """Chạy một lệnh computer-use trực tiếp, phục vụ desktop UI/tooling local."""
     result = execute_computer_command(req.command, req.enabled, approval_token=req.approval_token or None)
     return _computer_result_payload(result)
+
+
+def _plain_tool_payload(
+    *,
+    ok: bool,
+    message: str,
+    action: str,
+    data: dict | list | None = None,
+) -> dict:
+    return {
+        "handled": True,
+        "ok": ok,
+        "message": message,
+        "action": action,
+        "risk_level": "safe",
+        "needs_approval": False,
+        "approval_id": "",
+        "artifacts": [],
+        "data": data or {},
+    }
+
+
+async def _execute_agent_tool(
+    name: str,
+    arguments: dict,
+    *,
+    enabled: bool,
+    approval_token: str = "",
+) -> dict:
+    """Nối tool call của model vào đúng hàm hiện có và giữ nguyên guardrail."""
+    if name == "workspace_status":
+        return _computer_result_payload(await asyncio.to_thread(workspace_status_result))
+    if name == "workspace_diagnostics":
+        return _computer_result_payload(await asyncio.to_thread(workspace_diagnostics_result))
+    if name == "workspace_review":
+        return _computer_result_payload(await asyncio.to_thread(workspace_review_result))
+    if name == "workspace_diff":
+        return _computer_result_payload(await asyncio.to_thread(workspace_current_diff_result))
+    if name == "workspace_list_files":
+        result = await asyncio.to_thread(workspace_list_files_result, str(arguments.get("query") or ""))
+        return _computer_result_payload(result)
+    if name == "workspace_search":
+        result = await asyncio.to_thread(workspace_search_result, str(arguments.get("pattern") or ""))
+        return _computer_result_payload(result)
+    if name == "workspace_read":
+        result = await asyncio.to_thread(workspace_read_result, str(arguments.get("path") or ""))
+        return _computer_result_payload(result)
+    if name == "workspace_patch":
+        result = await asyncio.to_thread(
+            workspace_patch_result,
+            str(arguments.get("path") or ""),
+            str(arguments.get("old") or ""),
+            str(arguments.get("new") or ""),
+            bool(arguments.get("apply", False)),
+            approval_token or None,
+        )
+        return _computer_result_payload(result)
+    if name == "workspace_run":
+        result = await asyncio.to_thread(
+            workspace_run_command_result,
+            str(arguments.get("command") or ""),
+            approval_token or None,
+        )
+        return _computer_result_payload(result)
+    if name == "computer_command":
+        result = await asyncio.to_thread(
+            execute_computer_command,
+            str(arguments.get("command") or ""),
+            enabled,
+            1,
+            approval_token or None,
+        )
+        return _computer_result_payload(result)
+    if name == "memory_search":
+        query = str(arguments.get("query") or "").strip()
+        items = await _search_memory(query, int(arguments.get("limit") or 5))
+        return _plain_tool_payload(
+            ok=True,
+            message=f"Tìm thấy {len(items)} trí nhớ liên quan.",
+            action="memory_search",
+            data={"type": "memory_search", "items": items},
+        )
+    if name == "memory_remember":
+        content = str(arguments.get("content") or "").strip()
+        if not content:
+            return _plain_tool_payload(
+                ok=False,
+                message="Nội dung cần ghi nhớ đang trống.",
+                action="memory_remember",
+            )
+        embedding, embedding_model = await _ollama_embedding(content)
+        item = await asyncio.to_thread(
+            _memory_store().add,
+            content,
+            str(arguments.get("category") or "general"),
+            str(arguments.get("source") or "user"),
+            0.5,
+            embedding,
+            embedding_model,
+        )
+        return _plain_tool_payload(
+            ok=True,
+            message="Minion đã lưu trí nhớ local.",
+            action="memory_remember",
+            data={"type": "memory", "item": item.to_dict()},
+        )
+    if name == "knowledge_ingest":
+        try:
+            result = await _ingest_knowledge(
+                str(arguments.get("path") or ""),
+                str(arguments.get("category") or "knowledge"),
+            )
+        except ValueError as exc:
+            return _plain_tool_payload(ok=False, message=str(exc), action="knowledge_ingest")
+        return _plain_tool_payload(
+            ok=True,
+            message=f"Đã nhập {result['chunks']} phần tài liệu vào trí nhớ local.",
+            action="knowledge_ingest",
+            data={"type": "knowledge_ingest", **result},
+        )
+    return _plain_tool_payload(
+        ok=False,
+        message=f"Tool không được phép hoặc chưa tồn tại: {name}",
+        action="unknown_tool",
+    )
+
+
+async def _run_native_agent_worker(run_id: str, req: AgentRunRequest) -> None:
+    record = _agent_runs[run_id]
+    agent_cfg = _minion_settings.get("agent") or {}
+    configured_model = str(agent_cfg.get("model") or "auto")
+    model = route_model(req.task, _minion_settings, requested_model=configured_model)
+    record["model"] = model
+    record["agent_mode"] = "tool_calling"
+    memory_context = await _memory_context(req.task)
+
+    async def execute(name: str, arguments: dict) -> dict:
+        return await _execute_agent_tool(
+            name,
+            arguments,
+            enabled=req.enabled,
+            approval_token=req.approval_token,
+        )
+
+    def on_step(event: dict) -> None:
+        payload = event.get("result") or {}
+        record["steps"].append({
+            "index": len(record["steps"]) + 1,
+            "instruction": f"{event.get('tool')}({json.dumps(event.get('arguments') or {}, ensure_ascii=False)})",
+            "tool": event.get("tool"),
+            "arguments": event.get("arguments") or {},
+            "ok": bool(payload.get("ok")),
+            "action": payload.get("action") or event.get("tool"),
+            "risk_level": payload.get("risk_level") or "safe",
+            "needs_approval": bool(payload.get("needs_approval")),
+            "approval_id": payload.get("approval_id") or "",
+            "message": payload.get("message") or "",
+            "data": payload.get("data") or {},
+            "screenshot": None,
+        })
+        record["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
+
+    outcome = await run_tool_agent(
+        base_url=_ollama_base_url,
+        model=model,
+        task=req.task,
+        system_prompt=build_system_prompt(memory_context),
+        max_steps=req.max_steps,
+        execute_tool=execute,
+        on_step=on_step,
+        should_stop=lambda: bool(record.get("stop_requested")),
+        temperature=float(agent_cfg.get("temperature") or 0.1),
+    )
+    record.update({
+        "status": outcome.status,
+        "ok": outcome.ok,
+        "message": outcome.message,
+        "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+    })
 
 
 async def _agent_run_worker(run_id: str, req: AgentRunRequest) -> None:
@@ -2154,6 +2563,29 @@ async def _agent_run_worker(run_id: str, req: AgentRunRequest) -> None:
         return
 
     try:
+        agent_cfg = _minion_settings.get("agent") or {}
+        if str(agent_cfg.get("mode") or "rules") == "tool_calling":
+            try:
+                await _run_native_agent_worker(run_id, req)
+                return
+            except Exception as exc:
+                if not agent_cfg.get("fallback_to_rules", True):
+                    raise
+                record["fallback_reason"] = str(exc)
+                record["agent_mode"] = "rules_fallback"
+                record["steps"].append({
+                    "index": 0,
+                    "instruction": "Chuyển sang rule agent",
+                    "ok": False,
+                    "action": "agent_fallback",
+                    "risk_level": "safe",
+                    "needs_approval": False,
+                    "approval_id": "",
+                    "message": f"Tool-calling chưa dùng được, fallback an toàn: {exc}",
+                    "data": {},
+                    "screenshot": None,
+                })
+
         steps = plan_agent_steps(req.task, req.max_steps)
         record["plan"] = steps
         record["observation"] = get_computer_state()
@@ -2370,7 +2802,7 @@ if __name__ == "__main__":
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
 
-    _default_model = args.model
+    _default_model = args.model or str(_minion_settings.get("default_model") or "minion")
     _data_dir = args.data_dir
     _checkpoints_dir = args.checkpoints_dir
 

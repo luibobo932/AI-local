@@ -212,3 +212,62 @@ POST /api/workspace/read
 POST /api/workspace/patch
 POST /api/workspace/run
 ```
+
+---
+
+## Minion Brain v1
+
+Minion đã có lớp bộ não mới nhưng vẫn tương thích các API cũ:
+
+- `minion_core.py`: persona và định tuyến Qwen3/Qwen2.5-Coder theo nhiệm vụ.
+- `minion_memory.py`: trí nhớ SQLite local, tìm theo từ khóa và embedding Ollama.
+- `minion_agent.py`: vòng lặp tool-calling nhiều bước; thao tác rủi ro vẫn dùng approval hiện có.
+- `evals/`: bộ bài thi router, safety và chống nhận nhầm câu hỏi nhà thành lệnh máy.
+- `train_minion_qlora.py`: pipeline SFT + QLoRA 4-bit cho dữ liệu hội thoại/tool-calling.
+
+### Trí nhớ local
+
+```text
+GET    /api/memory
+POST   /api/memory/remember
+POST   /api/memory/search
+DELETE /api/memory/{id}
+POST   /api/knowledge/ingest
+GET    /api/minion/config
+GET    /api/minion/route?text=...
+```
+
+Trên giao diện có nút `Ghi nhớ`. Database mặc định là `data/minion_memory.db` và không được commit.
+
+### Kiểm tra bộ não
+
+```powershell
+$env:PYTHONPATH=(Get-Location).Path
+python -m unittest discover -s tests -p "test_*.py" -v
+python evals/run_minion_eval.py --base-url http://127.0.0.1:11435
+```
+
+### Môi trường GPU riêng
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup_minion_gpu.ps1
+.\.venv-cuda\Scripts\python.exe verify_minion_gpu.py
+```
+
+### Chuẩn bị dữ liệu và QLoRA
+
+Dữ liệu phải là JSONL hội thoại có trường `messages`; xem `data/minion_sft_sample.jsonl`.
+
+```powershell
+# Chỉ kiểm tra dữ liệu/cấu hình, chưa train
+.\.venv-cuda\Scripts\python.exe train_minion_qlora.py `
+  --data data\minion_sft_sample.jsonl --dry-run
+
+# Chỉ train khi đã có dữ liệu thật được review
+.\.venv-cuda\Scripts\python.exe train_minion_qlora.py `
+  --base Qwen/Qwen3-0.6B `
+  --data data\minion_sft.jsonl `
+  --out models\minion-sft-v1
+```
+
+Không train bản chính bằng file sample. File sample chỉ dùng kiểm tra schema.

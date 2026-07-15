@@ -44,6 +44,14 @@ class MinionComputerUseContracts(unittest.TestCase):
         self.assertFalse(result.needs_approval)
         self.assertEqual(result.risk_level, "blocked")
 
+    def test_powershell_recursive_delete_is_blocked(self):
+        result = execute_computer_command('chay lenh "Remove-Item -Recurse C:\\data"', True)
+        self.assertIsNotNone(result)
+        self.assertFalse(result.ok)
+        self.assertFalse(result.needs_approval)
+        self.assertEqual(result.action, "blocked")
+        self.assertEqual(result.risk_level, "blocked")
+
     def test_workspace_patch_preview_does_not_apply(self):
         status = workspace_status_result()
         self.assertTrue(status.ok)

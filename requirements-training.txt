@@ -1,0 +1,5 @@
+# Phần bổ sung để fine-tune SFT/DPO/QLoRA trên GPU NVIDIA.
+accelerate>=1.10.0
+bitsandbytes>=0.46.0
+trl>=0.20.0
+sentencepiece>=0.2.0

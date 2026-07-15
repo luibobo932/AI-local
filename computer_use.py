@@ -134,7 +134,7 @@ def _dangerous_shell_text(text: str) -> bool:
     plain = _plain_text(text)
     patterns = [
         r"\brm\s+-rf\b",
-        r"\bremove-item\b.*\b-recurse\b",
+        r"\bremove-item\b.*(?:^|\s)-recurse\b",
         r"\brd\s+/s\b",
         r"\brmdir\s+/s\b",
         r"\bdel\s+/s\b",
