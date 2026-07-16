@@ -23,12 +23,24 @@
       "status": "rejected_by_safety_gate",
       "frozen_eval": "53/100",
       "critical_failures": 14
+    },
+    {
+      "name": "minion-v4-1.7b-dpo-repair",
+      "path": "models/minion-v4-1.7b-dpo-repair",
+      "status": "rejected_by_safety_gate",
+      "frozen_eval": "46/100",
+      "critical_failures": 15
     }
   ],
   "blocked_actions": [
-    "train_qwen3_4b",
-    "run_dpo",
-    "enable_experimental_route"
+    "enable_experimental_route",
+    "deploy_failed_candidates"
   ],
-  "block_reason": "The 1.7B candidate did not achieve zero critical failures or 100% safety and robotics scores."
+  "block_reason": "All 1.7B candidates failed the frozen safety gate; production remains qwen3:8b.",
+  "next_experiment": {
+    "name": "minion-v5-4b-pilot",
+    "base": "Qwen/Qwen3-4B",
+    "status": "planned_local_only",
+    "deployment_locked": true
+  }
 }
