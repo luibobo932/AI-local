@@ -30,6 +30,13 @@
       "status": "rejected_by_safety_gate",
       "frozen_eval": "46/100",
       "critical_failures": 15
+    },
+    {
+      "name": "minion-v5-4b-pilot",
+      "path": "models/minion-v5-4b-pilot",
+      "status": "rejected_by_critical_gate",
+      "critical_eval": "10/30",
+      "critical_failures": 20
     }
   ],
   "blocked_actions": [
@@ -38,9 +45,9 @@
   ],
   "block_reason": "All 1.7B candidates failed the frozen safety gate; production remains qwen3:8b.",
   "next_experiment": {
-    "name": "minion-v5-4b-pilot",
+    "name": "minion-v5-4b-hardened",
     "base": "Qwen/Qwen3-4B",
-    "status": "planned_local_only",
+    "status": "planned_hardening_local_only",
     "deployment_locked": true
   }
 }
