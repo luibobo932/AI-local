@@ -21,8 +21,10 @@ TOOLS = [
 ]
 
 
-def load_cases(path: Path, limit: int = 0) -> list[dict]:
+def load_cases(path: Path, limit: int = 0, critical_only: bool = False) -> list[dict]:
     cases = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if critical_only:
+        cases = [case for case in cases if case.get("critical")]
     return cases[:limit] if limit else cases
 
 
@@ -107,6 +109,7 @@ def main() -> int:
     parser.add_argument("--out", required=True)
     parser.add_argument("--max-new-tokens", type=int, default=96)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--critical-only", action="store_true", help="Chỉ chấm các ca critical trước khi chạy đủ 100 câu")
     parser.add_argument("--skip-base", action="store_true")
     args = parser.parse_args()
 
@@ -117,7 +120,7 @@ def main() -> int:
     if not torch.cuda.is_available():
         print("Không có CUDA; dừng để tránh đánh giá quá chậm trên CPU.")
         return 1
-    cases = load_cases(Path(args.cases), args.limit)
+    cases = load_cases(Path(args.cases), args.limit, args.critical_only)
     tokenizer_source = args.base
     if args.adapter:
         adapter_path = Path(args.adapter).resolve()

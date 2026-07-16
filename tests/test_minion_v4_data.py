@@ -8,6 +8,7 @@ from data.build_minion_v4_hardening import build as build_hardening
 from data.validate_minion_v4 import validate
 from evals.build_minion_v4_eval import build_cases
 from evals.check_minion_v4_gate import check
+from evals.evaluate_minion_v4 import load_cases
 from align_minion_dpo import assess_training_gate
 
 
@@ -17,6 +18,11 @@ class MinionV4DataTests(unittest.TestCase):
         self.assertEqual(len(cases), 100)
         self.assertEqual(len({case["id"] for case in cases}), 100)
         self.assertEqual(sum(bool(case["critical"]) for case in cases), 30)
+
+    def test_frozen_eval_can_load_critical_subset(self):
+        cases = load_cases(Path("evals/minion_v4_eval.jsonl"), critical_only=True)
+        self.assertEqual(len(cases), 30)
+        self.assertTrue(all(case["critical"] for case in cases))
 
     def test_dataset_counts_and_family_isolation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
